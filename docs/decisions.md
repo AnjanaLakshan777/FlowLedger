@@ -164,10 +164,33 @@ confirmed before production.
   or ES256 with published public keys) or gateway validation should replace
   it before production.
 
+### Internal Membership Authorization API
+
+- `GET /internal/v1/identity/companies/{companyId}/membership` lets other
+  FlowLedger services ask whether a user may act for a company. It returns
+  only `allowed` and, when allowed, `companyRole`.
+- The user is identified from their own access token, which the calling
+  service forwards in the `Authorization` header and identity-service
+  validates itself. The user ID is never taken from the request.
+- Access is allowed only when the user's account, the company, and the
+  user's membership in that company are all `ACTIVE`. Statuses are read at
+  the time of each check, so locking a user or suspending a membership takes
+  effect immediately, even for unexpired tokens. The check makes no database
+  changes.
+- Service-to-service authentication: `/internal/**` has its own security
+  chain that requires the shared `IDENTITY_INTERNAL_API_SECRET` in the
+  `X-Internal-Api-Key` header, compared in constant time, in addition to a
+  valid user token. A missing or wrong key returns 401. The secret is separate
+  from `JWT_SECRET`, must be at least 32 characters, and both services fail
+  to start without it.
+- The shared internal secret is an initial solution. Production-grade service
+  identity (for example mTLS, or signed service credentials issued per
+  service) should replace it, and `/internal/**` should not be routed through
+  the public API gateway.
+
 ### Known Limitations
 
-- Email verification, membership approval, and backend-enforced company RBAC
-  are not yet implemented.
+- Email verification and membership approval are not yet implemented.
 - No flow activates `PENDING` accounts yet, so newly registered users cannot
   log in. For local testing, accounts must be activated directly in the
   database.
@@ -211,17 +234,39 @@ confirmed business rules and must be reviewed before production.
 - The service validates identity-service access tokens with the shared HS256
   `JWT_SECRET`: signature, issuer `flowledger-identity`, required `exp` and
   `iat`, and a UUID `sub`. It has no token-issuing code.
-- Access tokens carry only the user ID, and identity-service does not expose
-  company memberships to other services. The service therefore cannot verify
-  company membership, and every company-scoped request is refused with 403.
-  The bank account API cannot be used until this integration exists.
-- An account requested under another company's path returns 404.
+- Every company-scoped request is authorized through identity-service's
+  internal membership API (section 6), forwarding the user's token. A valid
+  token alone never grants access, and company roles are not put in tokens.
+- Initial role policy for bank accounts (provisional, not a confirmed
+  business rule):
+
+  | Operation | Allowed roles |
+  |---|---|
+  | List bank accounts | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
+  | Read a bank account | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
+  | Create a bank account | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+
+  `CASHIER` has no access to bank accounts.
+- Responses: 401 for a missing or invalid user token; 403 when the user is
+  not an active member or their role is not permitted; 404 for an account
+  that does not exist within the authorized company, including another
+  company's account ID.
+- Fail closed: if identity-service cannot be reached, times out (2 s connect,
+  3 s read), returns an error, or returns an unreadable answer, the request is
+  refused with 503 and nothing is changed. Access is never granted without a
+  successful answer.
+- Configuration: `IDENTITY_SERVICE_URL` (default `http://localhost:8080`) and
+  `IDENTITY_INTERNAL_API_SECRET`. When the services run in Docker Compose,
+  `IDENTITY_SERVICE_URL` must use the identity-service container name, not
+  `localhost`. The application services are not yet containerized.
 
 ### Known Limitations
 
-- Company-membership and role information from identity-service is required
-  before the bank account API can be used.
-- No role-based permissions for bank account actions.
+- Every company-scoped request makes a synchronous call to identity-service,
+  so bank account endpoints are unavailable while identity-service is down.
+  There is no caching of membership answers.
+- The role policy is enforced in bank-integration-service; there is no
+  shared permission model across services yet.
 - Bank account changes do not yet write to `bank_integration_audit_events`,
   and there is no outbox.
 
@@ -248,9 +293,11 @@ The following must be researched or agreed before implementation:
 - Refresh tokens, token revocation, and login rate limiting or lockout.
 - How other services will validate access tokens (asymmetric signing keys,
   gateway validation, or another approach).
-- How other services learn a user's company memberships and roles (token
-  claims, an identity-service API, or events), and which company roles may
-  view or manage bank accounts.
+- Confirmation of the provisional bank account role policy, and the wider
+  role-permission matrix across services.
+- Production-grade service-to-service authentication (for example mTLS) to
+  replace the shared `IDENTITY_INTERNAL_API_SECRET`, and whether membership
+  answers may be cached and for how long.
 - Account-number policy: whether full account numbers are stored (encrypted)
   and how keys are managed; whether account numbers must be unique.
 - Whether account types other than `CURRENT`, or more than one active account

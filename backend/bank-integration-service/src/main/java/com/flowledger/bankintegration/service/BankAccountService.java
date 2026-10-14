@@ -9,24 +9,34 @@ import com.flowledger.bankintegration.exception.ActiveCurrentAccountExistsExcept
 import com.flowledger.bankintegration.exception.BankAccountNotFoundException;
 import com.flowledger.bankintegration.repository.BankAccountRepository;
 import com.flowledger.bankintegration.security.CompanyAccessVerifier;
+import com.flowledger.bankintegration.security.CompanyRole;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class BankAccountService {
 
+    // Provisional policy (docs/decisions.md). CASHIER has no access to bank accounts.
+    private static final Set<CompanyRole> VIEW_ROLES =
+            EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
+    private static final Set<CompanyRole> CREATE_ROLES =
+            EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER);
+
     private final BankAccountRepository bankAccountRepository;
     private final CompanyAccessVerifier companyAccessVerifier;
 
     @Transactional
-    public BankAccountResponse createBankAccount(UUID userId, UUID companyId, CreateBankAccountRequest request) {
-        companyAccessVerifier.verify(userId, companyId);
+    public BankAccountResponse createBankAccount(Jwt user, UUID companyId, CreateBankAccountRequest request) {
+        companyAccessVerifier.verify(user, companyId, CREATE_ROLES);
 
         if (request.accountType() == BankAccountType.CURRENT && bankAccountRepository
                 .existsByCompanyIdAndAccountTypeAndStatus(companyId, BankAccountType.CURRENT, BankAccountStatus.ACTIVE)) {
@@ -52,16 +62,16 @@ public class BankAccountService {
     }
 
     @Transactional(readOnly = true)
-    public BankAccountResponse getBankAccount(UUID userId, UUID companyId, UUID accountId) {
-        companyAccessVerifier.verify(userId, companyId);
+    public BankAccountResponse getBankAccount(Jwt user, UUID companyId, UUID accountId) {
+        companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
         return bankAccountRepository.findByCompanyIdAndId(companyId, accountId)
                 .map(BankAccountResponse::from)
                 .orElseThrow(BankAccountNotFoundException::new);
     }
 
     @Transactional(readOnly = true)
-    public List<BankAccountResponse> listBankAccounts(UUID userId, UUID companyId) {
-        companyAccessVerifier.verify(userId, companyId);
+    public List<BankAccountResponse> listBankAccounts(Jwt user, UUID companyId) {
+        companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
         return bankAccountRepository.findByCompanyIdOrderByCreatedAtAsc(companyId).stream()
                 .map(BankAccountResponse::from)
                 .toList();

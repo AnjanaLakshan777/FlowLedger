@@ -28,27 +28,22 @@ public class BankAccountController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public BankAccountResponse createBankAccount(@AuthenticationPrincipal Jwt jwt,
+    public BankAccountResponse createBankAccount(@AuthenticationPrincipal Jwt user,
                                                  @PathVariable UUID companyId,
                                                  @Valid @RequestBody CreateBankAccountRequest request) {
-        return bankAccountService.createBankAccount(userId(jwt), companyId, request);
+        return bankAccountService.createBankAccount(user, companyId, request);
     }
 
     @GetMapping
-    public List<BankAccountResponse> listBankAccounts(@AuthenticationPrincipal Jwt jwt,
+    public List<BankAccountResponse> listBankAccounts(@AuthenticationPrincipal Jwt user,
                                                       @PathVariable UUID companyId) {
-        return bankAccountService.listBankAccounts(userId(jwt), companyId);
+        return bankAccountService.listBankAccounts(user, companyId);
     }
 
     @GetMapping("/{accountId}")
-    public BankAccountResponse getBankAccount(@AuthenticationPrincipal Jwt jwt,
+    public BankAccountResponse getBankAccount(@AuthenticationPrincipal Jwt user,
                                               @PathVariable UUID companyId,
                                               @PathVariable UUID accountId) {
-        return bankAccountService.getBankAccount(userId(jwt), companyId, accountId);
-    }
-
-    // The token validator only accepts a UUID subject, so this cannot fail for a verified token.
-    private static UUID userId(Jwt jwt) {
-        return UUID.fromString(jwt.getSubject());
+        return bankAccountService.getBankAccount(user, companyId, accountId);
     }
 }

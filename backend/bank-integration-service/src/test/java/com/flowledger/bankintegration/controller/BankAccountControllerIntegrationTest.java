@@ -1,7 +1,6 @@
 package com.flowledger.bankintegration.controller;
 
-import com.flowledger.bankintegration.exception.CompanyAccessDeniedException;
-import com.flowledger.bankintegration.security.CompanyAccessVerifier;
+import com.flowledger.bankintegration.support.FakeIdentityServer;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,10 +12,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -31,9 +30,6 @@ import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -41,9 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Tests the bank account API for a user who has been granted access to one company.
- * Company membership cannot be resolved yet (see CompanyAccessVerifier), so the verifier is
- * replaced here; SecurityIntegrationTest covers the real verifier, which refuses everyone.
+ * Tests the bank account API for a COMPANY_ADMIN of one company. Membership answers come from
+ * FakeIdentityServer over HTTP; role-by-role rules are in BankAccountAuthorizationIntegrationTest.
  * Needs the local bank-integration PostgreSQL database. Each test is rolled back.
  */
 @SpringBootTest
@@ -52,15 +47,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class BankAccountControllerIntegrationTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final FakeIdentityServer identityService = FakeIdentityServer.instance();
+
+    @DynamicPropertySource
+    static void identityServiceUrl(DynamicPropertyRegistry registry) {
+        registry.add("flowledger.identity.base-url", identityService::baseUrl);
+    }
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
-
-    @MockitoBean
-    private CompanyAccessVerifier companyAccessVerifier;
 
     private UUID userId;
     private UUID companyId;
@@ -73,8 +71,8 @@ class BankAccountControllerIntegrationTest {
         companyId = UUID.randomUUID();
         otherCompanyId = UUID.randomUUID();
 
-        doThrow(new CompanyAccessDeniedException()).when(companyAccessVerifier).verify(any(), any());
-        doNothing().when(companyAccessVerifier).verify(userId, companyId);
+        identityService.reset();
+        identityService.grant(companyId, "COMPANY_ADMIN");
     }
 
     @Test
@@ -245,11 +243,11 @@ class BankAccountControllerIntegrationTest {
                 .andExpect(status().isUnauthorized());
 
         assertThat(countAccounts(companyId)).isZero();
+        assertThat(identityService.lastAuthorization()).isNull();
     }
 
     private MockHttpServletRequestBuilder authenticated(MockHttpServletRequestBuilder request) {
-        RequestPostProcessor token = jwt().jwt(jwt -> jwt.subject(userId.toString()));
-        return request.with(token);
+        return request.with(jwt().jwt(jwt -> jwt.subject(userId.toString())));
     }
 
     private static String accountsUrl(UUID companyId) {

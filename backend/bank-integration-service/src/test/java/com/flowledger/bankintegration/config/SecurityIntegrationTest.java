@@ -1,5 +1,6 @@
 package com.flowledger.bankintegration.config;
 
+import com.flowledger.bankintegration.support.FakeIdentityServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,8 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,13 +37,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Runs the real security chain and the real CompanyAccessVerifier with tokens signed the way
- * identity-service signs them. Needs the local bank-integration PostgreSQL database.
+ * Runs the real security chain and CompanyAccessVerifier with tokens signed the way
+ * identity-service signs them; membership answers come from FakeIdentityServer over HTTP.
+ * Needs the local bank-integration PostgreSQL database.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
 class SecurityIntegrationTest {
+
+    private static final FakeIdentityServer identityService = FakeIdentityServer.instance();
+
+    @DynamicPropertySource
+    static void identityServiceUrl(DynamicPropertyRegistry registry) {
+        registry.add("flowledger.identity.base-url", identityService::baseUrl);
+    }
 
     @Autowired
     private MockMvc mockMvc;
@@ -60,6 +71,7 @@ class SecurityIntegrationTest {
         identityServiceEncoder = encoderFor(JwtConfig.signingKey(jwtProperties.secret()));
         companyId = UUID.randomUUID();
         accountsUrl = "/api/v1/bank-integration/companies/" + companyId + "/bank-accounts";
+        identityService.reset();
     }
 
     @Test
@@ -71,7 +83,18 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void shouldRefuseCompanyAccessForValidTokenUntilMembershipCanBeVerified() throws Exception {
+    void shouldAllowValidTokenWithActiveMembershipAndForwardIt() throws Exception {
+        String token = token(identityServiceEncoder, UUID.randomUUID().toString(), jwtProperties.issuer(), Instant.now());
+        identityService.grant(companyId, "ACCOUNTANT");
+
+        mockMvc.perform(get(accountsUrl).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk());
+
+        assertThat(identityService.lastAuthorization()).isEqualTo("Bearer " + token);
+    }
+
+    @Test
+    void shouldNotGrantCompanyAccessForValidTokenAlone() throws Exception {
         String token = "Bearer " + token(identityServiceEncoder, UUID.randomUUID().toString(),
                 jwtProperties.issuer(), Instant.now());
 
@@ -132,9 +155,14 @@ class SecurityIntegrationTest {
     }
 
     private void assertInvalidToken(String token) throws Exception {
+        identityService.grant(companyId, "COMPANY_ADMIN");
+
         mockMvc.perform(get(accountsUrl).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, containsString("invalid_token")));
+
+        // Rejected before any membership check.
+        assertThat(identityService.lastAuthorization()).isNull();
     }
 
     private static JwtEncoder encoderFor(SecretKey key) {
