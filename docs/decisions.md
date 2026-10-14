@@ -37,6 +37,12 @@ database directly. Cross-service database foreign keys are not permitted.
 The initial `identity-service` project has been generated and run.
 Its business functionality and security implementation are not yet complete.
 
+Bank accounts are owned by `bank-integration-service`, as assigned in
+`docs/FlowLedger-Final-Database-Schema-v1.md`, so that later bank statement,
+balance, and transaction tables can reference them within the same database.
+`bank-integration-service` has been created with bank account management only
+(see section 7).
+
 ## 4. Confirmed Business Rules
 
 ### Bank Account and Forecast
@@ -151,10 +157,12 @@ confirmed before production.
 - Public endpoints: health, login, company registration, and user
   registration. Every other endpoint requires a valid bearer token.
 - HS256 uses one shared secret for both signing and verification. Any service
-  holding the secret could also issue tokens, so it must not be copied to
-  other services. If other services need to validate tokens, use asymmetric
-  signing (for example RS256 or ES256 with published public keys) or validate
-  at the API gateway.
+  holding the secret could also issue tokens. As a provisional choice,
+  `bank-integration-service` validates tokens with the same `JWT_SECRET`
+  (see section 7). The key must stay in environment configuration and must
+  not be shared with further services. Asymmetric signing (for example RS256
+  or ES256 with published public keys) or gateway validation should replace
+  it before production.
 
 ### Known Limitations
 
@@ -170,7 +178,54 @@ confirmed before production.
 - Company registration, user registration, and login do not yet write to
   `identity_audit_events`. Auditing these actions remains outstanding.
 
-## 7. Unresolved Decisions
+## 7. Provisional Bank Integration Rules
+
+These rules are implemented in `bank-integration-service`. They are not
+confirmed business rules and must be reviewed before production.
+
+### Bank Accounts
+
+- `bank_accounts` is created by migration `V1__create_bank_accounts_table.sql`,
+  following section 6.1 of the schema document. `company_id` is an
+  identity-service ID stored without a cross-service foreign key.
+- API: `POST` and `GET /api/v1/bank-integration/companies/{companyId}/bank-accounts`,
+  and `GET .../bank-accounts/{accountId}`. There is no update or deactivate
+  endpoint yet.
+- Only the `CURRENT` account type is accepted. A company can have at most one
+  `ACTIVE` `CURRENT` account, enforced by a partial unique index; a second one
+  returns 409. This applies the confirmed MVP one-current-account rule strictly.
+- New accounts are created `ACTIVE`. Currency uses the database default `LKR`
+  and is not accepted from clients.
+- Only the last four digits of the account number are accepted and stored.
+  `account_number_encrypted` exists in the table but is not written until
+  encryption and key management are decided. No banking credentials are stored.
+- Bank account records are metadata only and do not represent a balance.
+- `integrationMode` accepts the four schema values (`STATEMENT_IMPORT`,
+  `BANK_API`, `SIMULATOR`, `MANUAL`), but no import or bank API exists yet.
+- Local setup: port 8082; database `flowledger_bank_integration` in the
+  `bank-integration-db` container on port 5434; password from
+  `BANK_INTEGRATION_DB_PASSWORD`.
+
+### Token Validation and Company Access
+
+- The service validates identity-service access tokens with the shared HS256
+  `JWT_SECRET`: signature, issuer `flowledger-identity`, required `exp` and
+  `iat`, and a UUID `sub`. It has no token-issuing code.
+- Access tokens carry only the user ID, and identity-service does not expose
+  company memberships to other services. The service therefore cannot verify
+  company membership, and every company-scoped request is refused with 403.
+  The bank account API cannot be used until this integration exists.
+- An account requested under another company's path returns 404.
+
+### Known Limitations
+
+- Company-membership and role information from identity-service is required
+  before the bank account API can be used.
+- No role-based permissions for bank account actions.
+- Bank account changes do not yet write to `bank_integration_audit_events`,
+  and there is no outbox.
+
+## 8. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -193,8 +248,16 @@ The following must be researched or agreed before implementation:
 - Refresh tokens, token revocation, and login rate limiting or lockout.
 - How other services will validate access tokens (asymmetric signing keys,
   gateway validation, or another approach).
+- How other services learn a user's company memberships and roles (token
+  claims, an identity-service API, or events), and which company roles may
+  view or manage bank accounts.
+- Account-number policy: whether full account numbers are stored (encrypted)
+  and how keys are managed; whether account numbers must be unique.
+- Whether account types other than `CURRENT`, or more than one active account
+  per company, are needed after the MVP, and how a current account is
+  replaced or deactivated.
 
-## 8. Decision Log Maintenance
+## 9. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.

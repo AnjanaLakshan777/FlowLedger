@@ -21,5 +21,28 @@ services:
       timeout: 5s
       retries: 5
 
+  bank-integration-db:
+    image: postgres:17
+    container_name: flowledger-bank-integration-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: flowledger_bank_integration
+      POSTGRES_USER: flowledger_app
+      POSTGRES_PASSWORD: ${BANK_INTEGRATION_DB_PASSWORD:?Set BANK_INTEGRATION_DB_PASSWORD in your environment}
+
+    ports:
+      - "5434:5432"
+
+    volumes:
+      - bank_integration_db_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowledger_app -d flowledger_bank_integration"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   identity_db_data:
+  bank_integration_db_data:
