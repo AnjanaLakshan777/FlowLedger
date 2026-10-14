@@ -95,7 +95,82 @@ Its business functionality and security implementation are not yet complete.
 - Include automated tests and production-grade error handling.
 - Keep services maintainable and independently responsible for their data.
 
-## 6. Unresolved Decisions
+## 6. Provisional Identity Rules
+
+These rules are implemented in `identity-service` as safe defaults while
+email verification, membership approval, and company-level authorization are
+not available. They are not confirmed business rules and must be reviewed and
+confirmed before production.
+
+### User Self-Registration
+
+- Self-registration permits only the `ACCOUNTANT` and `CASHIER` company
+  roles. Requests for `COMPANY_ADMIN` or `FINANCE_CONTROLLER` are rejected
+  with 403.
+- New user accounts are created with status `PENDING`.
+- New company memberships are created with status `INVITED`. `INVITED` is
+  temporarily used to represent a self-registered membership awaiting
+  approval. A dedicated approval-pending status may be considered before
+  production.
+- Registration for a non-existent or inactive company returns 404.
+
+### Passwords and Email
+
+- Passwords must be 12–72 characters and at most 72 UTF-8 bytes, for BCrypt
+  compatibility.
+- Emails are normalized to lowercase. A duplicate normalized email returns 409.
+- Returning 409 for duplicate emails allows email enumeration. Rate limiting
+  and email verification must be considered before production.
+
+### Login and Access Tokens
+
+- `POST /api/v1/identity/auth/login` takes an email and password and returns
+  a JWT access token (`accessToken`, `tokenType: Bearer`, `expiresIn` in
+  seconds).
+- Only `ACTIVE` accounts can log in. Wrong passwords, unknown emails, and
+  `PENDING`, `LOCKED`, or `DISABLED` accounts all receive the same generic
+  401 response.
+- Tokens are signed with HS256 and validated by Spring Security's OAuth2
+  resource server (Nimbus JOSE + JWT). Signature, issuer, expiry, and the
+  presence of `sub`, `iat`, and `exp` are validated.
+- Tokens contain only `sub` (user ID), `iss`, `iat`, and `exp`. They carry no
+  company roles or personal data. A successful login does not grant access to
+  company data.
+- Configuration (`application.properties`):
+  - `flowledger.security.jwt.issuer`: `flowledger-identity`
+  - `flowledger.security.jwt.access-token-ttl`: `15m`
+  - `flowledger.security.jwt.secret`: read from the `JWT_SECRET` environment
+    variable. It must be a Base64-encoded key of at least 256 bits. The
+    service fails to start if it is missing or invalid; there is no
+    development fallback.
+- Local setup: add `JWT_SECRET` to the repository-root `.env` (see
+  `.env.example`). The test suite uses its own test-only key.
+- The API is stateless: no server sessions, form login, HTTP Basic, or logout
+  endpoint. CSRF protection is disabled because clients send the token in the
+  `Authorization` header rather than a cookie.
+- Public endpoints: health, login, company registration, and user
+  registration. Every other endpoint requires a valid bearer token.
+- HS256 uses one shared secret for both signing and verification. Any service
+  holding the secret could also issue tokens, so it must not be copied to
+  other services. If other services need to validate tokens, use asymmetric
+  signing (for example RS256 or ES256 with published public keys) or validate
+  at the API gateway.
+
+### Known Limitations
+
+- Email verification, membership approval, and backend-enforced company RBAC
+  are not yet implemented.
+- No flow activates `PENDING` accounts yet, so newly registered users cannot
+  log in. For local testing, accounts must be activated directly in the
+  database.
+- Company and user registration remain public endpoints.
+- There are no refresh tokens or token revocation. An access token stays
+  valid until it expires.
+- Login has no rate limiting or lockout after failed attempts.
+- Company registration, user registration, and login do not yet write to
+  `identity_audit_events`. Auditing these actions remains outstanding.
+
+## 7. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -111,8 +186,15 @@ The following must be researched or agreed before implementation:
 - Exact audit retention and access requirements.
 - Whether and when to introduce Spring Cloud Gateway, after verifying
   compatibility with the selected Spring Boot version.
+- Company roles permitted through self-registration, the membership approval
+  workflow, and whether to add an approval-pending membership status.
+- Email verification and registration rate-limiting approach.
+- How `PENDING` accounts become `ACTIVE`, and who may register companies.
+- Refresh tokens, token revocation, and login rate limiting or lockout.
+- How other services will validate access tokens (asymmetric signing keys,
+  gateway validation, or another approach).
 
-## 7. Decision Log Maintenance
+## 8. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.
