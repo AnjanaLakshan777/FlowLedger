@@ -1,8 +1,10 @@
 /**
- * The one place the frontend talks to the FlowLedger backend. Requests go to same-origin
- * /api/v1/... paths (proxied to the services in development). The access token is the only
- * credential the browser holds; service-to-service secrets never reach the frontend.
+ * The one place the frontend talks to the FlowLedger backend, always through the API gateway:
+ * same-origin /api/v1/... paths (the Vite proxy forwards them in development), or the gateway URL
+ * in VITE_API_BASE_URL when the frontend is served from another origin. The access token is the
+ * only credential the browser holds; service-to-service secrets never reach the frontend.
  */
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "")
 
 /** An error answer from a service, in its RFC 9457 problem-details form. */
 export class ApiError extends Error {
@@ -71,7 +73,7 @@ export async function api<T>(path: string, { method = "GET", json, form, signal,
 
   let res: Response
   try {
-    res = await fetch(path, { method, headers, body: json !== undefined ? JSON.stringify(json) : form, signal })
+    res = await fetch(BASE_URL + path, { method, headers, body: json !== undefined ? JSON.stringify(json) : form, signal })
   } catch (e) {
     if ((e as Error).name === "AbortError") throw e
     throw new ApiError(0, "FlowLedger could not be reached. Check your connection and try again.")

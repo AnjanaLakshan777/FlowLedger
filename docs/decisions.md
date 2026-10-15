@@ -52,6 +52,9 @@ balance, and transaction tables can reference them within the same database.
 `forecast-service` has been created with the rolling 84-day forecast and
 Forecast vs Actual only (see section 10).
 
+`api-gateway` has been created as the single entry point for the frontend
+(see section 12).
+
 ## 4. Confirmed Business Rules
 
 ### Bank Account and Forecast
@@ -757,11 +760,11 @@ retry; the frontend never falls back to demonstration data.
 
 ### Connection and Sessions
 
-- All requests go to same-origin `/api/v1/...` paths. In development the Vite
-  server forwards each prefix to its service (identity 8080, cash-management
-  8081, bank-integration 8082, payment 8083, forecast 8084), so the services
-  need no CORS configuration. A deployment needs a gateway with the same
-  routes.
+- All requests go through the API gateway (section 12). In development the
+  frontend calls same-origin `/api/v1/...` paths and the Vite server forwards
+  `/api` to the gateway (`API_GATEWAY_URL`, default
+  `http://localhost:8088`). A frontend served from another origin sets
+  `VITE_API_BASE_URL` to the gateway URL and relies on the gateway's CORS.
 - Sign-in uses the identity login API. The access token is kept in session
   storage, or local storage when "Keep me signed in" is chosen; a 401 from
   any service ends the session. The browser never holds service secrets.
@@ -802,7 +805,78 @@ retry; the frontend never falls back to demonstration data.
   screen yet, although both APIs exist.
 - Bank transactions have no value date in the API.
 
-## 12. Unresolved Decisions
+## 12. API Gateway and Environment Configuration
+
+### API Gateway
+
+- `backend/api-gateway` (port 8088) uses Spring Cloud Gateway Server WebMVC
+  5.0.3 from the Spring Cloud 2025.1.3 release train, which lists Spring Boot
+  4.0.x and 4.1.x as compatible. It is servlet-based like the services.
+- Routes keep each service's own prefix, so paths and query strings are
+  forwarded unchanged: `/api/v1/identity/**` (8080),
+  `/api/v1/cash-management/**` (8081), `/api/v1/bank-integration/**` (8082),
+  `/api/v1/payment/**` (8083), `/api/v1/forecast/**` (8084). Service URLs
+  come from `IDENTITY_SERVICE_URL`, `CASH_MANAGEMENT_SERVICE_URL`,
+  `BANK_INTEGRATION_SERVICE_URL`, `PAYMENT_SERVICE_URL`, and
+  `FORECAST_SERVICE_URL`. Anything else, including `/internal/**`, is not
+  routed (404).
+- The gateway does not authenticate or authorize. It forwards the
+  `Authorization` header unchanged, and every service still validates the
+  token and checks company membership and role on each request, so the
+  gateway cannot bypass tenant isolation or roles. The gateway holds no JWT
+  key or internal secret, and it removes any `X-Internal-Api-Key` header
+  sent by a client.
+- Request bodies are streamed unchanged; multipart uploads are not parsed
+  by the gateway, and upload limits stay with the services. Spring may add a
+  `charset` parameter to the forwarded `Content-Type`; the media type and
+  multipart boundary are unchanged.
+- Timeouts: 2 s to connect, 30 s to answer. A service that cannot be reached
+  returns 503 and one that does not answer in time returns 504, both as
+  problem details naming the service; answers from the services, including
+  their 401, 403, and 503, are passed through unchanged. Log lines contain
+  the method and path only, never headers or tokens.
+- Health: `GET /api/v1/gateway/health`; each service's health stays at
+  `/api/v1/<service>/health` through the gateway.
+- CORS: only the origins in `GATEWAY_CORS_ALLOWED_ORIGINS` (default
+  `http://localhost:5173`) may call the API from a browser, with the
+  `Authorization` and `Content-Type` headers and without credentials
+  (tokens are never sent as cookies).
+- Docker Compose: `api-gateway` is in the optional `gateway` profile
+  (`docker compose --profile gateway up -d api-gateway`, after building the
+  jar). Its container reaches the services running on the host through
+  `host.docker.internal` and receives only the service URLs and allowed
+  origins.
+
+### Environment Configuration
+
+- One git-ignored `.env` in the repository root holds local secrets and
+  settings; it is read by Docker Compose, every backend service, and (for
+  `API_GATEWAY_*` only) the Vite dev server. `.env.example` lists every
+  variable with placeholders and short headings only.
+- Names follow `<SERVICE>_DB_PASSWORD` / `_DB_URL` / `_DB_USERNAME` for
+  databases and `<SERVICE>_SERVICE_URL` for service locations. identity-service
+  now reads `IDENTITY_DB_URL`, `IDENTITY_DB_USERNAME`, and
+  `IDENTITY_DB_PASSWORD` (previously `DB_URL`, `DB_USERNAME`, and
+  `DB_PASSWORD`, which duplicated the same password).
+- Added: `CASH_MANAGEMENT_SERVICE_URL`, `FORECAST_SERVICE_URL`,
+  `GATEWAY_CORS_ALLOWED_ORIGINS`, `API_GATEWAY_URL` (all optional, with
+  defaults), and the frontend build variable `VITE_API_BASE_URL`. `VITE_`
+  variables are visible in the browser and must never hold secrets.
+
+### Production Requirements
+
+- Serve the gateway, and the frontend, only over HTTPS with TLS terminated
+  at the gateway or a load balancer in front of it; plain HTTP only for
+  local development.
+- Set `GATEWAY_CORS_ALLOWED_ORIGINS` to the exact HTTPS origin of the
+  deployed frontend; never a wildcard.
+- Expose only the gateway; the services, `/internal/**`, and the databases
+  must not be reachable from outside the private network.
+- Configure the gateway's trusted proxies and forwarded headers for the
+  real network, and add rate limiting (especially for login and
+  registration).
+
+## 13. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -816,8 +890,6 @@ The following must be researched or agreed before implementation:
 - Reliable event publishing, event delivery guarantees, retries, and
   idempotency details.
 - Exact audit retention and access requirements.
-- Whether and when to introduce Spring Cloud Gateway, after verifying
-  compatibility with the selected Spring Boot version.
 - Company roles permitted through self-registration, the membership approval
   workflow, and whether to add an approval-pending membership status.
 - Email verification and registration rate-limiting approach.
@@ -882,8 +954,9 @@ The following must be researched or agreed before implementation:
   schedule or when source data changes (event consumers and projections).
 - Whether forecasts should show confidence ranges; the UI demonstration
   shows low/high bands that the backend does not calculate.
-- The production entry point for the frontend: an API gateway (or other
-  reverse proxy) with the same /api/v1 routes, and its CORS and TLS setup.
+- Production gateway hosting: TLS certificates, the deployed frontend
+  origin, rate limits, and whether the gateway should also reject invalid
+  tokens early (it would then need the token key or a public-key setup).
 - Token lifetime handling in the browser: there are no refresh tokens, so a
   user signs in again after the access token expires.
 - Whether daily sales may be corrected, whether they carry a note, and
@@ -895,7 +968,7 @@ The following must be researched or agreed before implementation:
   in the Git history; whether to replace it with an anonymized fixture and
   clean the history.
 
-## 13. Decision Log Maintenance
+## 14. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.
