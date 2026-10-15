@@ -660,6 +660,75 @@ follow the finalized UI and must be reviewed before production.
   `true`); events written meanwhile are published once it is enabled again.
   It is not the activation boundary.
 
+### Internal Cheque API
+
+Confirmed for this milestone (Feature 2, milestone 1): a read-only API for
+forecast-service's cheque projection backfill and verification. Not used by
+anything yet.
+
+- Authentication: a separate `/internal/**` security chain, ordered before
+  the public one, accepts only the header `X-Internal-Api-Key` with
+  `PAYMENT_INTERNAL_API_SECRET`, compared as SHA-256 digests in constant
+  time (the identity-service pattern). User access tokens are not accepted
+  there, alone or as a substitute; the caller is a service job, not a person,
+  so no company membership is checked. The key is a new secret, not
+  `IDENTITY_INTERNAL_API_SECRET`: only payment-service and forecast-service
+  should hold it, so a key leaked from another service does not expose every
+  company's cheques.
+- Fail closed: without the secret, payment-service starts (the public API
+  does not need it) but answers every internal request with 401 and logs a
+  warning. A secret shorter than 32 characters, or equal to
+  `IDENTITY_INTERNAL_API_SECRET`, stops startup. A wrong or missing key is
+  401 with a fixed body.
+- The API gateway does not route `/internal/**` (covered by the gateway
+  tests). Only services on the private network can reach it.
+- `GET /internal/v1/payment/cheques?afterId={uuid}&limit={n}` returns
+  `{"items": [...], "nextAfterId": uuid | null}`: cheques of all companies,
+  all statuses and all clearing dates, ordered by `id`, with `id >
+  afterId` (from the start when `afterId` is omitted). `limit` defaults
+  to 100 and must be 1 to 500; anything else, or a malformed `afterId`, is
+  400. `nextAfterId` is the last item's ID when more cheques followed at
+  the time of the read, otherwise null; a full last page therefore ends
+  with null, without an extra empty request.
+- Item fields, named and formatted as in the cheque event payload:
+  `chequeId`, `companyId`, `bankAccountId`, `chequeNumber`, `category`,
+  `amount` (plain decimal string, two decimals), `issueDate`,
+  `expectedClearingDate` (ISO dates), `status`, and `version` (the same
+  column the events carry). No payee, notes, creator, or timestamps.
+- Order: PostgreSQL compares UUIDs as unsigned bytes, which equals the
+  order of their lowercase text. Java's `UUID.compareTo` compares signed
+  halves and orders differently; clients must pass `nextAfterId` back
+  unchanged and never compare cursors with it.
+- `GET /internal/v1/payment/cheques/summary[?companyId={uuid}]` returns
+  `{"chequeCount": n, "companies": [{"companyId", "chequeCount",
+  "issuedCount", "cancelledCount", "versionSum"}]}`, one entry per company
+  with cheques (ascending by ID), or only the given company; a company
+  without cheques has no entry. All numbers come from one SQL statement, so
+  they are consistent with each other at one moment. Forecast-service gets
+  the company list from here and does not need identity-service.
+
+Completeness and consistency (what is guaranteed and what is not):
+
+- Each page and each summary is one statement and therefore internally
+  consistent. A whole scan is **not** a snapshot: pages are separate
+  requests and transactions.
+- IDs are random (`gen_random_uuid()`), so a cheque committed during a scan
+  with an ID below the cursor is not returned by that scan; one above the
+  cursor is. A cheque changed during the scan is returned at whatever
+  version the page read. No cheque is returned twice by one scan.
+- Cheques are never deleted and their version only grows, so a client can
+  prove completeness: read its own copy's count and version sum for a
+  company first, then the summary. Its copy is complete and current exactly
+  when both match, provided every cheque in its copy exists in
+  payment-service with that company at a version no higher than here (true
+  for a copy filled only from this API and the cheque events). A mismatch
+  means a cheque was missed or changed meanwhile: rescan, or wait for the
+  events, and compare again. Nothing is silently omitted if the client
+  follows this check.
+- Cheques missed by a scan also reach forecast-service as outbox events,
+  because every change written after the outbox activation boundary has
+  one; the summary check covers the case that they have not arrived yet.
+
 ### Authorization and Dependencies
 
 - Calls to identity-service and bank-integration-service finish before any
@@ -679,7 +748,10 @@ follow the finalized UI and must be reviewed before production.
 - No alert yet for events that keep failing to publish; they stay pending and
   are visible through `attempt_count` and `last_error`.
 - No audit-history read API.
-- Listing is not paginated.
+- The public cheque list is not paginated (the internal scan is).
+- The internal API trusts any holder of the key with every company's
+  cheques; there is no per-caller identity, scope, rate limit, or audit log
+  of internal reads. The summary lists all companies in one response.
 - The JWT validation, identity client, and authorization code is also
   duplicated here.
 
@@ -843,13 +915,12 @@ boundary; cheques created earlier (and the seven unpublished development
 events) are not in the projection. Forecasts must not switch to the
 projection until it has been backfilled and checked. Proposed approach:
 
-- Read every company's cheques from the existing payment API, `GET
-  /api/v1/payment/companies/{companyId}/cheques` (all statuses), and apply
-  each one with the same guarded upsert as the consumer: insert, or update
-  only when the API's `version` is higher than the stored
-  `source_version` and the company matches. The API's `version` is the same
-  cheque column the events carry. `payeeName`, `notes`, and the audit
-  fields in the response are dropped; `source_event_created_at` stays null,
+- Read all cheques through payment-service's internal scan (section 9,
+  Internal Cheque API) and apply each one with the same guarded upsert as
+  the consumer: insert, or update only when the API's `version` is higher
+  than the stored `source_version` and the company matches. The API's
+  `version` is the same cheque column the events carry. The scan has no
+  payee, notes, or audit fields; `source_event_created_at` stays null,
   and `last_event_id` needs a marker for backfilled rows (it is NOT NULL),
   for example a fixed, documented "backfill" UUID, or the column made
   nullable by a later migration.
@@ -861,15 +932,12 @@ projection until it has been backfilled and checked. Proposed approach:
   a delayed event, the event is `STALE` when it arrives. Equal versions hold
   the same data. A cheque changed after its API read arrives later as an
   event with a higher version.
-- Limitations to solve first: the endpoint has no pagination (one response
-  per company with all its cheques); it needs a user JWT with a permitted
-  role in that company, but a backfill is a system job, so it needs a service
-  identity or an internal endpoint; forecast-service cannot list companies,
-  so the set of companies must come from identity-service; completeness
-  cannot be proven from the API alone (no total count, cut-off, or
-  checksum), so compare counts per company and status with payment-service
-  before relying on the projection; and a cheque deleted in payment-service
-  (not currently possible) would never be removed.
+- Completeness: compare the projection's count and version sum per company
+  with payment-service's summary, as described there, and rescan on a
+  mismatch. Still open: the forecast side (client, checkpoint, sync state,
+  `last_event_id` for backfilled rows) is not implemented, and a cheque
+  deleted in payment-service (not currently possible) would never be
+  removed.
 
 ### Authorization
 
@@ -1023,6 +1091,10 @@ retry; the frontend never falls back to demonstration data.
   compose.yaml, payment-service, and forecast-service), optional
   `RABBITMQ_HOST`, `RABBITMQ_PORT`, `OUTBOX_PUBLISHER_ENABLED`
   (payment-service), and `CHEQUE_EVENTS_CONSUMER_ENABLED` (forecast-service).
+- `PAYMENT_INTERNAL_API_SECRET`: key for payment-service's internal API, at
+  least 32 characters and different from `IDENTITY_INTERNAL_API_SECRET`;
+  forecast-service will need the same value for the backfill. Optional for
+  now: without it the internal API refuses every request.
 
 ### Production Requirements
 
@@ -1052,8 +1124,11 @@ The following must be researched or agreed before implementation:
   procedure for dead-lettered or long-pending events, and production broker
   setup (TLS, users and permissions per service, high availability).
 - When forecasts switch from the payment API to the cheque projection, and
-  how the backfill authenticates, finds all companies, and proves
-  completeness (see Cheque Projection Backfill).
+  the forecast side of the backfill (see Cheque Projection Backfill).
+- Whether the internal cheque scan needs a stronger consistency model (for
+  example a scan watermark or a database snapshot export) instead of the
+  summary-and-rescan check, and whether the shared internal key should be
+  replaced by per-service credentials or mTLS in production.
 - Retention of `processed_events` rows (currently kept forever).
 - Exact audit retention and access requirements.
 - Company roles permitted through self-registration, the membership approval

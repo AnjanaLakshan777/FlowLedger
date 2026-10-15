@@ -3,6 +3,8 @@ package com.flowledger.payment.config;
 import com.flowledger.payment.support.FakeIdentityServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -111,6 +113,19 @@ class SecurityIntegrationTest {
         Integer saved = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM cheques WHERE company_id = ?", Integer.class, companyId);
         assertThat(saved).isZero();
+    }
+
+    // The internal API takes the internal API key only; a valid user token is not a substitute.
+    @ParameterizedTest
+    @ValueSource(strings = {"/internal/v1/payment/cheques", "/internal/v1/payment/cheques/summary"})
+    void shouldRejectAUserTokenOnTheInternalApi(String path) throws Exception {
+        String token = token(identityServiceEncoder, UUID.randomUUID().toString(), jwtProperties.issuer(), Instant.now());
+        identityService.grant(companyId, "COMPANY_ADMIN");
+
+        mockMvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value("Invalid service credentials."));
+        assertThat(identityService.lastAuthorization()).isNull();
     }
 
     @Test

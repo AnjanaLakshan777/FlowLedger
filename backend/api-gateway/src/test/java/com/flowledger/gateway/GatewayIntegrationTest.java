@@ -149,7 +149,8 @@ class GatewayIntegrationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"/internal/v1/identity/companies/c1/membership", "/api/v1/unknown/x", "/api/v2/identity/me"})
+    @CsvSource({"/internal/v1/identity/companies/c1/membership", "/internal/v1/payment/cheques",
+            "/internal/v1/payment/cheques/summary", "/api/v1/unknown/x", "/api/v2/identity/me"})
     void shouldNotRouteInternalOrUnknownPaths(String path) throws Exception {
         HttpResponse<String> response = send(get(path).header("Authorization", TOKEN));
 
