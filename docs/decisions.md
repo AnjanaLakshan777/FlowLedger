@@ -360,6 +360,95 @@ confirmed business rules and must be reviewed before production.
   `IDENTITY_SERVICE_URL` must use the identity-service container name, not
   `localhost`. The application services are not yet containerized.
 
+### Bank Statement CSV Import
+
+- Migration `V2__create_bank_statement_import_tables.sql` creates
+  `bank_statement_import_batches`, `bank_transactions`,
+  `bank_balance_snapshots`, `bank_integration_audit_events`, and
+  `outbox_events` (schema document section 6). Additions to the schema:
+  `bank_transactions.running_balance`, `cheque_number`, `branch_code`, and
+  `entry_sequence` (keeps the bank's order within a day); a
+  category-direction check; and a JSON `validation_errors` column on batches.
+- API under `/api/v1/bank-integration/companies/{companyId}`:
+  `POST /bank-accounts/{bankAccountId}/statement-imports` (multipart part
+  `file`), `GET /statement-imports`, `GET /statement-imports/{batchId}`,
+  `GET /bank-transactions` (optional `bankAccountId`, `category`, `from`,
+  `to`), `GET /bank-transactions/{id}`, and
+  `PUT /bank-transactions/{id}/classification` (`category`, optional `reason`).
+- Only one format is supported: the bank's "Transaction Details" CSV, as in
+  the sample statement (format name `TRANSACTION_DETAILS_CSV`). Up to 10
+  title rows before the header are allowed; columns are found by header name.
+  Dates are read strictly as `M/d/yyyy`; amounts may use thousands
+  separators. Each row must have exactly one amount matching its Credit or
+  Debit type (the other cell blank or 0). Running Balance is required and may
+  be negative. Cheque numbers are kept as text, so leading zeros remain; an
+  all-zero cheque number means "no cheque". Branch ID is optional. A new bank
+  format is added as another parser.
+- Files: `.csv` only, at most 2 MB and 20,000 rows, UTF-8, with a CSV or
+  plain-text content type. Only the cleaned file name (no client path) and
+  the SHA-256 hash are stored; the file itself is not kept. Statement
+  contents are never logged.
+- Confirmed for this feature: one invalid row rejects the whole file; a break
+  in the running-balance chain rejects the whole file; rows with amount 0 are
+  skipped and counted. A rejected file returns 422 with its errors (at most
+  100 are reported) and is kept as a `FAILED` batch with those errors, but no
+  transactions are stored.
+- File order is not assumed. Newest-first or oldest-first is taken from the
+  dates, or from the balance chain when every row has the same date; if the
+  order still cannot be decided, the file is rejected.
+- Imports go only into the company's `ACTIVE` `CURRENT` account (404 for an
+  unknown or other company's account, 409 for an inactive one). An import is
+  one database transaction: batch, transactions, balance snapshot, audit
+  event, and outbox events are all stored, or none are.
+- Every new transaction starts as `UNCLASSIFIED` with method `UNKNOWN`.
+  Nothing is classified automatically, and there is no matching,
+  reconciliation, holiday shifting, or forecast calculation.
+
+### Duplicates and Balance Snapshots
+
+- Each transaction gets a fingerprint per account: date, direction, amount,
+  running balance, normalized description, cheque number, and branch.
+  Because the balance differs, legitimately repeated rows on the same day
+  (for example three identical telecom payments) are kept separately; rows
+  identical even in balance are told apart by their occurrence in the file.
+  A unique constraint plus `ON CONFLICT DO NOTHING` skips rows already
+  imported, also when two imports of the same file run at the same time.
+- A file is never rejected because its hash was seen before. A repeated file
+  is processed, its rows are counted as duplicates, and the response lists
+  `earlierImportsOfSameFile`. Overlapping statements import only new rows.
+- A balance snapshot is recorded from the newest row's running balance (by
+  date and the bank's order), as of 23:59:59 `Asia/Colombo` on that date,
+  with source `STATEMENT_IMPORT`. A missing balance is never treated as zero;
+  the file is rejected instead. The same balance at the same time is not
+  recorded twice.
+
+### Statement Authorization, Classification, and Audit
+
+- Role policy:
+
+  | Operation | Allowed |
+  |---|---|
+  | Import a statement | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+  | Classify a transaction | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+  | View imports and transactions | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
+
+  Import and classify roles were confirmed for this feature; `ACCOUNTANT`
+  view access follows the UI permission matrix and is an implementation
+  decision. `CASHIER` has no access. Statements are business data, so a
+  `SYSTEM_ADMIN` needs a company membership; there is no platform bypass
+  here (unlike viewing and configuring bank accounts).
+- Categories: `CASH_SALES_DEPOSIT` and `CARD_SALES_SETTLEMENT` only for
+  credits, `CHEQUE_PAYMENT` only for debits, `OTHER` and `UNCLASSIFIED` for
+  both. This is checked by the API (400) and by a database constraint.
+- Audit events (`bank_integration_audit_events`, append-only like the
+  payment audit table): `BANK_STATEMENT_IMPORTED` and
+  `BANK_STATEMENT_REJECTED` with batch counts, and `TRANSACTION_CLASSIFIED`
+  with the actor, reason, and before/after classification. Classifying with
+  the unchanged category writes nothing.
+- Outbox events in the same transaction: `BankTransactionImported`,
+  `BankBalanceSnapshotRecorded`, and `BankTransactionCategoryChanged`, with
+  IDs, dates, amounts, and category but no description.
+
 ### Known Limitations
 
 - Every company-scoped request makes a synchronous call to identity-service,
@@ -367,8 +456,17 @@ confirmed business rules and must be reviewed before production.
   There is no caching of membership answers.
 - The role policy is enforced in bank-integration-service; there is no
   shared permission model across services yet.
-- Bank account changes do not yet write to `bank_integration_audit_events`,
-  and there is no outbox.
+- Bank account changes do not yet write to `bank_integration_audit_events`.
+- No outbox publisher yet, so the forecast does not receive bank events.
+- Fingerprints rely on the running balance. A file without balances, or a
+  bank that re-sends a row with a corrected balance or description, would
+  not be recognised as a duplicate.
+- `BankAccountService` still makes its identity call inside the database
+  transaction; the statement services do not.
+- Transaction and import lists are not paginated; statement batch statuses
+  `UPLOADED` and `VALIDATING` are not used (imports are synchronous).
+- The test resources contain a copy of the sample bank statement, which may
+  hold real account data.
 
 ## 8. Provisional Cash Management Rules
 

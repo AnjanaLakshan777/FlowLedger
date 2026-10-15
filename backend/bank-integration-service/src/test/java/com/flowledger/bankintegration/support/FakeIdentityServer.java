@@ -27,7 +27,9 @@ public final class FakeIdentityServer {
 
     private static final Pattern MEMBERSHIP_PATH =
             Pattern.compile("/internal/v1/identity/companies/([^/]+)/membership");
-    private static final Reply DENIED = new Reply(200, "{\"allowed\":false,\"companyRole\":null,\"platformAdmin\":false}", Duration.ZERO);
+    private static final Runnable NOTHING = () -> { };
+    private static final Reply DENIED =
+            new Reply(200, "{\"allowed\":false,\"companyRole\":null,\"platformAdmin\":false}", Duration.ZERO, NOTHING);
     private static final FakeIdentityServer INSTANCE = new FakeIdentityServer();
 
     private final HttpServer server;
@@ -65,7 +67,7 @@ public final class FakeIdentityServer {
     }
 
     public void grant(UUID companyId, String companyRole) {
-        reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}");
+        reply(companyId, 200, allowedBody(companyRole));
     }
 
     // An active system admin without a membership in the company.
@@ -74,11 +76,19 @@ public final class FakeIdentityServer {
     }
 
     public void reply(UUID companyId, int status, String body) {
-        replies.put(companyId, new Reply(status, body, Duration.ZERO));
+        replies.put(companyId, new Reply(status, body, Duration.ZERO, NOTHING));
     }
 
     public void grantAfterDelay(UUID companyId, String companyRole, Duration delay) {
-        replies.put(companyId, new Reply(200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}", delay));
+        replies.put(companyId, new Reply(200, allowedBody(companyRole), delay, NOTHING));
+    }
+
+    /**
+     * Grants access, but first runs {@code whileCallerWaits} on the server thread. The calling
+     * service is blocked on this request meanwhile, so the action observes it mid-check.
+     */
+    public void grantAfter(UUID companyId, String companyRole, Runnable whileCallerWaits) {
+        replies.put(companyId, new Reply(200, allowedBody(companyRole), Duration.ZERO, whileCallerWaits));
     }
 
     public String lastServiceKey() {
@@ -96,9 +106,10 @@ public final class FakeIdentityServer {
         Matcher matcher = MEMBERSHIP_PATH.matcher(exchange.getRequestURI().getPath());
         Reply reply = matcher.matches()
                 ? replies.getOrDefault(UUID.fromString(matcher.group(1)), DENIED)
-                : new Reply(404, "{}", Duration.ZERO);
+                : new Reply(404, "{}", Duration.ZERO, NOTHING);
 
         try {
+            reply.whileCallerWaits().run();
             Thread.sleep(reply.delay());
             byte[] body = reply.body().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -113,6 +124,10 @@ public final class FakeIdentityServer {
         }
     }
 
-    private record Reply(int status, String body, Duration delay) {
+    private static String allowedBody(String companyRole) {
+        return "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}";
+    }
+
+    private record Reply(int status, String body, Duration delay, Runnable whileCallerWaits) {
     }
 }
