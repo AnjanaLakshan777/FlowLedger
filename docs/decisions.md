@@ -49,6 +49,9 @@ balance, and transaction tables can reference them within the same database.
 `payment-service` has been created with cheque payment management only
 (see section 9).
 
+`forecast-service` has been created with the rolling 84-day forecast and
+Forecast vs Actual only (see section 10).
+
 ## 4. Confirmed Business Rules
 
 ### Bank Account and Forecast
@@ -439,6 +442,11 @@ confirmed business rules and must be reviewed before production.
   with source `STATEMENT_IMPORT`. A missing balance is never treated as zero;
   the file is rejected instead. The same balance at the same time is not
   recorded twice.
+- `GET .../bank-accounts/{bankAccountId}/balance-snapshots/latest` returns the
+  newest snapshot (by `balance_as_of`, then the one recorded last) for
+  `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, and `ACCOUNTANT`, with no platform
+  bypass. With no snapshot it returns 404, never a zero balance. It exists so
+  forecast-service can read the confirmed balance.
 
 ### Statement Authorization, Classification, and Audit
 
@@ -612,7 +620,122 @@ follow the finalized UI and must be reviewed before production.
 - The JWT validation, identity client, and authorization code is also
   duplicated here.
 
-## 10. Unresolved Decisions
+## 10. Provisional Forecast Rules
+
+These rules are implemented in `forecast-service`. Rules not stated in section
+4 are implementation decisions and must be reviewed before production; the
+forecasting method in particular is a placeholder until the business rule is
+confirmed.
+
+### Runs and Inputs
+
+- Migration `V1__create_forecast_tables.sql` creates `forecast_model_configs`,
+  `forecast_runs`, `forecast_daily_results`, and `forecast_run_cheques`
+  (schema document section 7). Additions: `bank_account_id`, `currency`,
+  `balance_stale`, `inflow_estimate_status`, and `data_quality` on runs;
+  `expected_cheque_count` on days; `source_version` on run cheques. Expected
+  inflow columns are nullable (schema v1: NOT NULL default 0), because
+  "not estimated" must not be stored as zero.
+- Not created yet: the projection tables and `processed_events` (no event
+  consumer exists; inputs are read through APIs), `calendar_holidays` (no
+  verified holiday source), and an audit or outbox table (schema section 9
+  removes them from the MVP).
+- API under `/api/v1/forecast/companies/{companyId}/forecast-runs`: `POST`
+  (create a run), `GET` (list), `GET /{runId}` (run with its 84 days and the
+  cheques used), and `GET /{runId}/forecast-vs-actual`.
+- Inputs are read with the user's token from the owning services, never
+  from their databases: the active current account, its latest balance
+  snapshot, the statement import batches, and the bank transactions from
+  bank-integration-service; `ISSUED` cheques from payment-service. All calls
+  finish before the run's database transaction; open-in-view is off, so no
+  connection is held while they run. Daily sales from cash-management are
+  not used, so they cannot be counted twice.
+- Fail closed: if identity-service, bank-integration-service, or
+  payment-service cannot answer, answers with an error, times out, or returns
+  incomplete data, the request returns 503 and nothing is saved. No active
+  current account, or no confirmed LKR balance, returns 409; a missing
+  balance is never replaced by zero.
+- A run is saved complete and never changed (triggers reject `UPDATE`,
+  `DELETE`, `TRUNCATE`). It stores the cheques it deducted, a copy of the
+  configuration, and a SHA-256 digest of all inputs. Requesting a forecast
+  again on the same day with unchanged inputs returns the existing run
+  (200) instead of saving a copy, also for two requests at the same time.
+- The first run of a company creates configuration version 1 with method
+  `HISTORICAL_BANK_CASH_FLOW_PATTERN`, 84 days, and LKR 0 minimum balance.
+  There is no API to change it yet.
+
+### Calculation
+
+- The horizon is exactly 84 days and starts the day after the confirmed
+  balance's date (`Asia/Colombo`). Day 1 opens with the confirmed balance;
+  each later day opens with the previous day's closing balance. A day is a
+  cash shortage when its closing balance is below LKR 0; negative balances
+  are allowed throughout.
+- Expected outflows: `ISSUED` cheques on the current account whose expected
+  clearing date is within the horizon, on that date. `CANCELLED` cheques
+  never count. Because the horizon starts after the balance date, a cheque
+  expected after the balance date is never dropped. Cheques expected on or
+  before the balance date are not deducted and are not marked paid either.
+- Expected inflows (strategy `WEEKDAY_AVERAGE`, behind a replaceable
+  interface): for each weekday, the average of the `CASH_SALES_DEPOSIT`
+  credits, and separately of the `CARD_SALES_SETTLEMENT` credits, on the same
+  weekday in the 8 weeks up to the balance date, by actual transaction date,
+  rounded half-up to cents. Only days covered by an imported statement are
+  averaged; a covered day without such credits counts as 0, an uncovered day
+  is left out. `OTHER` and `UNCLASSIFIED` transactions are never counted.
+- If any weekday has fewer than 4 statement-covered days in that window, no
+  inflows are estimated: the run is `INSUFFICIENT_HISTORY`, inflow amounts
+  are null, and balances include cheque payments only.
+- Labels shown with each run: `BALANCE_STALE` when the balance is more than
+  3 days older than the day of the run (the forecast still starts from it);
+  `INSUFFICIENT_HISTORY`; and `INCOMPLETE_CLASSIFICATION` when the history
+  has `UNCLASSIFIED` credits. Lookback (8 weeks), minimum history (4 days
+  per weekday), and stale threshold (3 days) are stored configuration
+  values, not confirmed rules.
+
+### Forecast vs Actual
+
+- The client chooses the saved run to compare (the baseline-run rule is
+  open). Actual inflows are `CASH_SALES_DEPOSIT` and `CARD_SALES_SETTLEMENT`
+  credits; actual outflows are `CHEQUE_PAYMENT` debits; both by actual bank
+  transaction date. `OTHER` and `UNCLASSIFIED` are in neither total, and
+  unclassified transactions are counted and labelled.
+- Only days covered by an imported statement, up to today, have actual
+  values; other days are null, not zero. The actual closing balance is the
+  run's opening balance plus every actual transaction since, and stops at
+  the first day without statement coverage.
+- Differences are actual minus forecast. If the run did not estimate
+  inflows, inflow differences are null.
+
+### Authorization
+
+- `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, and `ACCOUNTANT` may create, list,
+  and read forecasts and Forecast vs Actual (the roles that see the forecast
+  pages in the UI permission matrix). `CASHIER` has no access. A
+  `SYSTEM_ADMIN` needs a company membership, since forecasts are financial
+  business data. Letting `ACCOUNTANT` create runs is an implementation
+  decision: a run only reads data.
+- Responses: 401 without a valid token, 403 without permission, 404 for a
+  run that is not in the authorized company.
+- Local setup: port 8084; database `flowledger_forecast` in the
+  `forecast-db` container on port 5437; password from `FORECAST_DB_PASSWORD`;
+  `BANK_INTEGRATION_SERVICE_URL` (default `http://localhost:8082`) and
+  `PAYMENT_SERVICE_URL` (default `http://localhost:8083`).
+
+### Known Limitations
+
+- A forecast needs four synchronous service calls plus the identity check;
+  it is unavailable while any of these services is down.
+- Bank transactions, imports, and cheques are read without pagination; long
+  histories make larger responses.
+- Cross-service calls were tested against fakes that follow the other
+  services' response formats, not against the running services.
+- Runs are created on request only; there are no scheduled or data-change
+  runs and no outbox events.
+- The JWT validation, identity client, and authorization code is duplicated
+  here as well.
+
+## 11. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -675,8 +798,25 @@ The following must be researched or agreed before implementation:
   bank corrections or reversals of imported rows are handled.
 - Whether `ACCOUNTANT` may classify transactions, and whether automatic
   classification rules (`RULE`, `BANK_METADATA`) will be introduced.
+- The forecasting method for sales inflows. The business direction mentions
+  current-year actual collections and the previous year's corresponding
+  weekly or daily pattern; the calculation, lookback, minimum history, and
+  fallback when history is missing are not confirmed. The current
+  `WEEKDAY_AVERAGE` strategy is a placeholder behind a replaceable interface.
+- Whether a forecast may run from a stale balance (currently it runs and is
+  labelled), and the stale threshold.
+- Whether the horizon should start the day after the balance date (current)
+  or on the current day, which matters when the balance is stale.
+- Treatment of `ISSUED` cheques expected on or before the balance date that
+  may not have cleared; they are currently not deducted and not marked paid.
+- The Forecast vs Actual baseline-run rule (which saved run is compared for
+  a period); the API currently takes the run from the client.
+- Who may create forecast runs, and whether runs should also be created on a
+  schedule or when source data changes (event consumers and projections).
+- Whether forecasts should show confidence ranges; the UI demonstration
+  shows low/high bands that the backend does not calculate.
 
-## 11. Decision Log Maintenance
+## 12. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.
