@@ -615,8 +615,50 @@ follow the finalized UI and must be reviewed before production.
   needs a separate runtime role without that power.
 - The same transaction writes a `ChequeIssued`, `ChequeUpdated`, or
   `ChequeCancelled` row to `outbox_events`, with cheque IDs, amount, dates,
-  status, and version but no payee or notes. Publishing the outbox (to the
-  forecast) is not implemented yet.
+  status, and version but no payee or notes.
+
+### Outbox Publishing (RabbitMQ)
+
+- Confirmed for this milestone: payment-service publishes its outbox to the
+  local RabbitMQ 4 broker (`rabbitmq` in compose.yaml), on the durable topic
+  exchange `flowledger.payment`. Routing keys: `ChequeIssued` →
+  `cheque.issued`, `ChequeUpdated` → `cheque.updated`, `ChequeCancelled`
+  → `cheque.cancelled`. An unknown event type is never routed by guess; it
+  stays pending.
+- Each message carries the stored JSON payload unchanged (no payee or notes),
+  is persistent, has the outbox event ID as its AMQP message ID, and has the
+  headers `eventType`, `schemaVersion`, `aggregateType`, `aggregateId`,
+  and `companyId`.
+- Delivery is at least once. An event is marked `published_at` only after a
+  publisher confirm (ack) for a message the broker could route (mandatory
+  publishing; a returned message counts as a failure). A nack, no confirm
+  within 10 s, an unroutable message, or an unreachable broker keeps the event
+  pending with `attempt_count`, `next_attempt_at`, and a short sanitized
+  `last_error` (no payload, no stack trace). Events are never dropped.
+- Retries use capped exponential backoff with equal jitter: half to all of
+  5 s × 2^(attempt − 1), capped at 15 minutes.
+- Claiming: one short statement reserves a batch with `FOR UPDATE SKIP
+  LOCKED` and a 60 s lease (`next_attempt_at` moves past the lease and the
+  attempt is counted). Publishing happens outside any database transaction;
+  marking the result is another short statement. A crash during an attempt
+  leaves the event leased; when the lease expires it is claimed again and
+  sent with the same message ID. Several publishers can run at once.
+- Order: only the oldest pending event of each cheque is claimed, so one
+  cheque's events are published in order; a pending earlier event holds back
+  later ones of the same cheque. Consumers must still check `version`.
+- Activation boundary: migration `V2__add_outbox_publishing_boundary.sql`
+  adds `publishable` with default `false`, then changes the default to
+  `true`. Existing rows are not rewritten (PostgreSQL stores the default in
+  the catalogue) and read `false`; every event written afterwards is
+  `true`. The publisher only claims `publishable` rows, so the seven
+  development events written before the migration were never published,
+  edited, or deleted (verified with a checksum of every column before and
+  after). A `created_at` cut-off was rejected: `created_at` is the
+  transaction start time, so an event committed just after a cut-off could be
+  skipped for good.
+- `OUTBOX_PUBLISHER_ENABLED=false` pauses the scheduled publisher (default
+  `true`); events written meanwhile are published once it is enabled again.
+  It is not the activation boundary.
 
 ### Authorization and Dependencies
 
@@ -628,7 +670,14 @@ follow the finalized UI and must be reviewed before production.
 
 ### Known Limitations
 
-- No outbox publisher yet, so the forecast does not receive cheque events.
+- No consumer yet: until a queue is bound to `flowledger.payment` (the
+  forecast consumer), every new cheque event is unroutable and stays pending,
+  retried with backoff. Nothing is lost, but nothing is delivered either.
+- Consumers must deduplicate on the message ID (at-least-once delivery) and
+  ignore older cheque versions. The forecast's `processed_events` table
+  (schema section 7.8) is meant for this.
+- No dead-letter handling or alert yet for events that keep failing; they
+  stay pending and are visible through `attempt_count` and `last_error`.
 - No audit-history read API.
 - Listing is not paginated.
 - The JWT validation, identity client, and authorization code is also
@@ -862,6 +911,9 @@ retry; the frontend never falls back to demonstration data.
   `GATEWAY_CORS_ALLOWED_ORIGINS`, `API_GATEWAY_URL` (all optional, with
   defaults), and the frontend build variable `VITE_API_BASE_URL`. `VITE_`
   variables are visible in the browser and must never hold secrets.
+- RabbitMQ: `RABBITMQ_USERNAME` and `RABBITMQ_PASSWORD` (required by
+  compose.yaml and payment-service), optional `RABBITMQ_HOST`,
+  `RABBITMQ_PORT`, and `OUTBOX_PUBLISHER_ENABLED`.
 
 ### Production Requirements
 
@@ -887,8 +939,10 @@ The following must be researched or agreed before implementation:
 - Verified official source and update process for Sri Lankan bank holidays.
 - Forecast estimation algorithm and its validation against historical data.
 - Business rules for forecast treatment of bank holidays.
-- Reliable event publishing, event delivery guarantees, retries, and
-  idempotency details.
+- Outbox publishing for bank-integration-service, the forecast consumer and
+  its queue bindings, dead-lettering and alerting for events that keep
+  failing, and production broker setup (TLS, users and permissions per
+  service, high availability).
 - Exact audit retention and access requirements.
 - Company roles permitted through self-registration, the membership approval
   workflow, and whether to add an approval-pending membership status.

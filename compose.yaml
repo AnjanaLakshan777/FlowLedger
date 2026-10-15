@@ -109,6 +109,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # Message broker for the services' outbox events (local development). Management UI on 15672.
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: flowledger-rabbitmq
+    # RabbitMQ keeps its data per node name, so a fixed hostname keeps it across re-creation.
+    hostname: flowledger-rabbitmq
+    restart: unless-stopped
+
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?Set RABBITMQ_USERNAME in your environment}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in your environment}
+
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+
   # Single entry point for the frontend. Optional: docker compose --profile gateway up -d api-gateway
   # (build the jar first). The services still run on the host, so they are reached through
   # host.docker.internal. The gateway holds no secrets; each service checks tokens itself.
@@ -144,3 +169,4 @@ volumes:
   cash_management_db_data:
   payment_db_data:
   forecast_db_data:
+  rabbitmq_data:
