@@ -53,10 +53,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, "/api/v1/identity/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/identity/auth/login").permitAll()
-                        // Public until company onboarding and membership approval are designed.
-                        .requestMatchers(HttpMethod.POST,
-                                "/api/v1/identity/companies",
-                                "/api/v1/identity/registrations").permitAll()
+                        // Public self-registration into an existing company; privileged roles are refused.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/identity/registrations").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
 

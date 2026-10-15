@@ -25,18 +25,19 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class BankAccountService {
 
-    // Provisional policy (docs/decisions.md). CASHIER has no access to bank accounts.
+    // Follows the UI permission matrix: the finance roles may view bank accounts, but configuring
+    // them is company administration (COMPANY_ADMIN, or a SYSTEM_ADMIN in any company). CASHIER
+    // has no access. A SYSTEM_ADMIN may also view them, since configuring requires seeing them.
     private static final Set<CompanyRole> VIEW_ROLES =
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
-    private static final Set<CompanyRole> CREATE_ROLES =
-            EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER);
+    private static final Set<CompanyRole> CONFIGURE_ROLES = EnumSet.of(CompanyRole.COMPANY_ADMIN);
 
     private final BankAccountRepository bankAccountRepository;
     private final CompanyAccessVerifier companyAccessVerifier;
 
     @Transactional
     public BankAccountResponse createBankAccount(Jwt user, UUID companyId, CreateBankAccountRequest request) {
-        companyAccessVerifier.verify(user, companyId, CREATE_ROLES);
+        companyAccessVerifier.verifyOrPlatformAdmin(user, companyId, CONFIGURE_ROLES);
 
         if (request.accountType() == BankAccountType.CURRENT && bankAccountRepository
                 .existsByCompanyIdAndAccountTypeAndStatus(companyId, BankAccountType.CURRENT, BankAccountStatus.ACTIVE)) {
@@ -63,7 +64,7 @@ public class BankAccountService {
 
     @Transactional(readOnly = true)
     public BankAccountResponse getBankAccount(Jwt user, UUID companyId, UUID accountId) {
-        companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
+        companyAccessVerifier.verifyOrPlatformAdmin(user, companyId, VIEW_ROLES);
         return bankAccountRepository.findByCompanyIdAndId(companyId, accountId)
                 .map(BankAccountResponse::from)
                 .orElseThrow(BankAccountNotFoundException::new);
@@ -71,7 +72,7 @@ public class BankAccountService {
 
     @Transactional(readOnly = true)
     public List<BankAccountResponse> listBankAccounts(Jwt user, UUID companyId) {
-        companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
+        companyAccessVerifier.verifyOrPlatformAdmin(user, companyId, VIEW_ROLES);
         return bankAccountRepository.findByCompanyIdOrderByCreatedAtAsc(companyId).stream()
                 .map(BankAccountResponse::from)
                 .toList();

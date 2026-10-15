@@ -93,6 +93,32 @@ Confirmed by the product owner on 2026-10-15.
   all of its own company's daily sales records, not only the ones the user
   recorded. Nobody can access another company's records.
 
+### Roles and Administration
+
+Confirmed by the product owner on 2026-10-15.
+
+- `SYSTEM_ADMIN` is a platform-level role (`users.platform_role`), separate
+  from company roles. It has platform-wide authority: creating and managing
+  companies, managing platform access, and platform-level settings. It may
+  perform company administration (company users, roles, and bank account
+  configuration) in any company where necessary.
+- Without a membership in a company, a `SYSTEM_ADMIN` has administration
+  access only. It cannot view or enter that company's daily sales or other
+  financial business data; for that it needs a company membership like
+  anyone else.
+- `COMPANY_ADMIN` is a company role (`company_memberships.company_role`)
+  limited to its assigned company. It manages that company's users, roles,
+  settings, bank account configuration, and business operations, and never
+  accesses or modifies another company's data.
+- `FINANCE_CONTROLLER`, `ACCOUNTANT`, and `CASHIER` keep the permissions of
+  the finalized UI permission matrix (`frontend/src/lib/permissions.ts`).
+- Only a `SYSTEM_ADMIN` can create companies.
+- `SYSTEM_ADMIN` can never be assigned through public self-registration or any
+  other API. It is provisioned only through the restricted database procedure
+  in section 6.
+- All permissions are enforced by the backend services, not only by frontend
+  navigation or button visibility.
+
 ### Cheques
 
 - Supported cheque statuses are `ISSUED` and `CANCELLED`.
@@ -180,8 +206,9 @@ confirmed before production.
 - The API is stateless: no server sessions, form login, HTTP Basic, or logout
   endpoint. CSRF protection is disabled because clients send the token in the
   `Authorization` header rather than a cookie.
-- Public endpoints: health, login, company registration, and user
-  registration. Every other endpoint requires a valid bearer token.
+- Public endpoints: health, login, and user self-registration. Every other
+  endpoint requires a valid bearer token. Company creation requires a
+  `SYSTEM_ADMIN` (section 4).
 - HS256 uses one shared secret for both signing and verification. Any service
   holding the secret could also issue tokens. As a provisional choice,
   `bank-integration-service` validates tokens with the same `JWT_SECRET`
@@ -194,7 +221,12 @@ confirmed before production.
 
 - `GET /internal/v1/identity/companies/{companyId}/membership` lets other
   FlowLedger services ask whether a user may act for a company. It returns
-  only `allowed` and, when allowed, `companyRole`.
+  only `allowed`, `companyRole` (set only for an active membership), and
+  `platformAdmin` (true for an active `SYSTEM_ADMIN` and an existing, active
+  company, with or without a membership). Each calling service decides which
+  operations `platformAdmin` permits. Callers treat an answer without
+  `platformAdmin` as invalid (503), so identity-service must be deployed
+  before the services that call it.
 - The user is identified from their own access token, which the calling
   service forwards in the `Authorization` header and identity-service
   validates itself. The user ID is never taken from the request.
@@ -214,18 +246,58 @@ confirmed before production.
   service) should replace it, and `/internal/**` should not be routed through
   the public API gateway.
 
+### Platform and Company Administration
+
+- `users.platform_role` is restricted to `USER` and `SYSTEM_ADMIN` by
+  migration `V8__restrict_platform_roles.sql`. New users get `USER`; the
+  application never writes this column.
+- Roles are read from the database on every request, never from the access
+  token, so removing a role or locking an account takes effect immediately.
+- `POST /api/v1/identity/companies` requires an active `SYSTEM_ADMIN`
+  (401 without a token, 403 for anyone else, including company admins).
+- `GET /api/v1/identity/companies/{companyId}/memberships` lists a company's
+  memberships; `PATCH .../memberships/{membershipId}` changes `companyRole`
+  and/or `status` (`ACTIVE` or `SUSPENDED`). Allowed for an active
+  `SYSTEM_ADMIN` in any company, or an active `COMPANY_ADMIN` (active account,
+  company, and membership) in their own company only. Another company's
+  membership ID returns 404 under the admin's own company.
+- Only company roles can be assigned through this API; requesting
+  `SYSTEM_ADMIN` returns 400. Nobody can change their own membership (403),
+  matching the UI. The last active `COMPANY_ADMIN` of a company cannot be
+  demoted or suspended (409); the company's active admins are locked during
+  the change so concurrent requests cannot remove the last one.
+
+### SYSTEM_ADMIN Provisioning Procedure
+
+No API grants `SYSTEM_ADMIN`. An operator with direct access to the identity
+database provisions it, and records who did it and when:
+
+1. If no company exists yet (company creation itself requires a
+   `SYSTEM_ADMIN`), insert the first company:
+   `INSERT INTO companies (name, status) VALUES ('<name>', 'ACTIVE');`
+2. The person registers through `POST /api/v1/identity/registrations` into an
+   existing company, with their own password.
+3. Activate the account and grant the platform role, matching the exact email:
+   `UPDATE users SET account_status = 'ACTIVE', platform_role = 'SYSTEM_ADMIN' WHERE lower(email) = lower('<email>');`
+4. Revoke with `UPDATE users SET platform_role = 'USER' WHERE ...`; it takes
+   effect on the next request.
+
 ### Known Limitations
 
 - Email verification and membership approval are not yet implemented.
-- No flow activates `PENDING` accounts yet, so newly registered users cannot
-  log in. For local testing, accounts must be activated directly in the
-  database.
-- Company and user registration remain public endpoints.
+- No flow activates `PENDING` accounts yet. Company admins can activate
+  memberships, but a newly registered user can only log in after the account
+  is activated directly in the database.
+- User self-registration remains public. There is no self-service tenant
+  onboarding: new companies are created by a `SYSTEM_ADMIN`.
+- Companies can be created but not yet updated, suspended, or closed through
+  the API.
 - There are no refresh tokens or token revocation. An access token stays
   valid until it expires.
 - Login has no rate limiting or lockout after failed attempts.
-- Company registration, user registration, and login do not yet write to
-  `identity_audit_events`. Auditing these actions remains outstanding.
+- Company creation, user registration, login, and membership or role changes
+  do not yet write to `identity_audit_events`. Auditing these actions,
+  especially administrative changes, remains outstanding.
 
 ## 7. Provisional Bank Integration Rules
 
@@ -263,16 +335,18 @@ confirmed business rules and must be reviewed before production.
 - Every company-scoped request is authorized through identity-service's
   internal membership API (section 6), forwarding the user's token. A valid
   token alone never grants access, and company roles are not put in tokens.
-- Initial role policy for bank accounts (provisional, not a confirmed
-  business rule):
+- Role policy for bank accounts, following the UI permission matrix and the
+  confirmed role architecture (section 4):
 
-  | Operation | Allowed roles |
+  | Operation | Allowed |
   |---|---|
-  | List bank accounts | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
-  | Read a bank account | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
-  | Create a bank account | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+  | List or read bank accounts | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT`; any active `SYSTEM_ADMIN` |
+  | Create (configure) a bank account | `COMPANY_ADMIN`; any active `SYSTEM_ADMIN` |
 
-  `CASHIER` has no access to bank accounts.
+  Configuring bank accounts is company administration, so the finance roles
+  can view but not configure them. `CASHIER` has no access. A `SYSTEM_ADMIN`
+  may view bank accounts without a membership because configuring requires
+  seeing them; this view access is an implementation decision.
 - Responses: 401 for a missing or invalid user token; 403 when the user is
   not an active member or their role is not permitted; 404 for an account
   that does not exist within the authorized company, including another
@@ -343,7 +417,8 @@ before production.
   company, active membership, and a permitted role. Identity-service failures
   return 503.
 - All four company roles may list, read, and create daily sales for their own
-  company (confirmed rule, section 4).
+  company (confirmed rule, section 4). A `SYSTEM_ADMIN` without a membership
+  in the company has no access to its daily sales (section 4).
 - The membership check finishes before any database transaction starts, so a
   slow identity-service does not hold database connections. Access is checked
   before request-specific validation such as the date filter, so a user
@@ -386,8 +461,8 @@ The following must be researched or agreed before implementation:
 - Refresh tokens, token revocation, and login rate limiting or lockout.
 - How other services will validate access tokens (asymmetric signing keys,
   gateway validation, or another approach).
-- Confirmation of the provisional bank account role policy, and the wider
-  role-permission matrix across services.
+- The permission matrix for features not built yet (historical import
+  approval, cheques, forecast, company settings) across services.
 - Production-grade service-to-service authentication (for example mTLS) to
   replace the shared `IDENTITY_INTERNAL_API_SECRET`, and whether membership
   answers may be cached and for how long.
@@ -398,14 +473,14 @@ The following must be researched or agreed before implementation:
   replaced or deactivated.
 - Who may correct recorded sales, under what conditions, and how corrections
   are audited.
-- The UI permission matrix (`frontend/src/lib/permissions.ts`) uses a
-  `SYSTEM_ADMIN` role, while identity-service's company roles use
-  `COMPANY_ADMIN`; how the two map, and whether a separate platform-level
-  administrator exists, is not decided.
-- The UI matrix gives "Configure bank integration" only to `SYSTEM_ADMIN`,
-  while bank-integration-service currently lets `COMPANY_ADMIN` and
-  `FINANCE_CONTROLLER` create bank accounts. Whether creating a bank account
-  counts as configuring bank integration needs to be decided.
+- The React UI still has a single `SYSTEM_ADMIN` role that represents the
+  company administrator, and no `COMPANY_ADMIN` or platform-admin screens.
+  Updating the frontend to the confirmed role architecture (section 4) is
+  outstanding.
+- How `PENDING` accounts are activated (email verification, or activation by
+  an administrator), and how platform-level settings are managed.
+- Self-service tenant onboarding, if any, instead of companies being created
+  by a `SYSTEM_ADMIN`.
 
 ## 10. Decision Log Maintenance
 

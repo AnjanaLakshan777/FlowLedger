@@ -1,5 +1,6 @@
 package com.flowledger.bankintegration.security;
 
-// Response of identity-service's internal membership check.
-record MembershipAuthorization(boolean allowed, CompanyRole companyRole) {
+// Response of identity-service's internal membership check. companyRole is set for an active
+// membership; platformAdmin is true for an active system admin and an active company.
+record MembershipAuthorization(boolean allowed, CompanyRole companyRole, boolean platformAdmin) {
 }

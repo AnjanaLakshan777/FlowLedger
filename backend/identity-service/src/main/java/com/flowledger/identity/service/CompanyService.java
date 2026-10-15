@@ -9,14 +9,20 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.UUID;
+
 @Service
 @RequiredArgsConstructor
 public class CompanyService {
 
     private final CompanyRepository companyRepository;
+    private final AdminAuthorizationService adminAuthorizationService;
 
+    // Creating companies is a platform-wide operation, reserved for system admins.
     @Transactional
-    public CompanyResponse createCompany(CreateCompanyRequest request) {
+    public CompanyResponse createCompany(UUID actorId, CreateCompanyRequest request) {
+        adminAuthorizationService.requirePlatformAdmin(actorId);
+
         Company company = new Company(
                 request.name().trim(),
                 trimToNull(request.registrationNumber()),

@@ -75,8 +75,65 @@ class InternalMembershipControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.allowed").value(true))
                 .andExpect(jsonPath("$.companyRole").value(role.name()))
+                .andExpect(jsonPath("$.platformAdmin").value(false))
                 .andExpect(jsonPath("$.email").doesNotExist())
                 .andExpect(jsonPath("$.userId").doesNotExist());
+    }
+
+    @Test
+    void shouldReportActiveSystemAdminWithoutMembershipAsPlatformAdmin() throws Exception {
+        makeSystemAdmin(userId);
+
+        checkMembership(companyId, accessToken(userId), internalApiSecret)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allowed").value(true))
+                .andExpect(jsonPath("$.platformAdmin").value(true))
+                .andExpect(jsonPath("$.companyRole", nullValue()));
+    }
+
+    @Test
+    void shouldReportBothRolesForSystemAdminWhoIsAlsoAMember() throws Exception {
+        makeSystemAdmin(userId);
+        insertMembership(companyId, userId, "ACCOUNTANT", "ACTIVE");
+
+        checkMembership(companyId, accessToken(userId), internalApiSecret)
+                .andExpect(jsonPath("$.allowed").value(true))
+                .andExpect(jsonPath("$.platformAdmin").value(true))
+                .andExpect(jsonPath("$.companyRole").value("ACCOUNTANT"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PENDING", "LOCKED", "DISABLED"})
+    void shouldDenySystemAdminWhoseAccountIsNotActive(String accountStatus) throws Exception {
+        makeSystemAdmin(userId);
+        String token = accessToken(userId);
+        jdbcTemplate.update("UPDATE users SET account_status = ? WHERE id = ?", accountStatus, userId);
+
+        assertDenied(checkMembership(companyId, token, internalApiSecret));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SUSPENDED", "CLOSED"})
+    void shouldDenySystemAdminForCompanyThatIsNotActive(String companyStatus) throws Exception {
+        makeSystemAdmin(userId);
+        jdbcTemplate.update("UPDATE companies SET status = ? WHERE id = ?", companyStatus, companyId);
+
+        assertDenied(checkMembership(companyId, accessToken(userId), internalApiSecret));
+    }
+
+    @Test
+    void shouldDenySystemAdminForUnknownCompany() throws Exception {
+        makeSystemAdmin(userId);
+
+        assertDenied(checkMembership(UUID.randomUUID(), accessToken(userId), internalApiSecret));
+    }
+
+    @Test
+    void shouldNotTreatCompanyAdminAsPlatformAdminInAnotherCompany() throws Exception {
+        UUID otherCompanyId = insertCompany("ACTIVE");
+        insertMembership(otherCompanyId, userId, "COMPANY_ADMIN", "ACTIVE");
+
+        assertDenied(checkMembership(companyId, accessToken(userId), internalApiSecret));
     }
 
     @ParameterizedTest
@@ -193,7 +250,13 @@ class InternalMembershipControllerIntegrationTest {
     private static void assertDenied(ResultActions result) throws Exception {
         result.andExpect(status().isOk())
                 .andExpect(jsonPath("$.allowed").value(false))
-                .andExpect(jsonPath("$.companyRole", nullValue()));
+                .andExpect(jsonPath("$.companyRole", nullValue()))
+                .andExpect(jsonPath("$.platformAdmin").value(false));
+    }
+
+    // Platform roles are only ever set directly in the database.
+    private void makeSystemAdmin(UUID userId) {
+        jdbcTemplate.update("UPDATE users SET platform_role = 'SYSTEM_ADMIN' WHERE id = ?", userId);
     }
 
     private static String membershipUrl(UUID companyId) {

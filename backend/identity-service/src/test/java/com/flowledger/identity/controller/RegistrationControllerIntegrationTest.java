@@ -126,6 +126,35 @@ class RegistrationControllerIntegrationTest {
         assertThat(countUsers(email)).isZero();
     }
 
+    // SYSTEM_ADMIN is a platform role, not a company role, so public registration cannot ask for it.
+    @Test
+    void shouldNotAcceptSystemAdminAsRequestedRole() throws Exception {
+        mockMvc.perform(post(REGISTRATIONS_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email": "%s", "fullName": "Nimal Perera", "password": "%s",
+                                 "companyId": "%s", "companyRole": "SYSTEM_ADMIN"}
+                                """.formatted(email, PASSWORD, companyId)))
+                .andExpect(status().isBadRequest());
+
+        assertThat(countUsers(email)).isZero();
+    }
+
+    @Test
+    void shouldIgnorePlatformRoleSentByClient() throws Exception {
+        mockMvc.perform(post(REGISTRATIONS_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email": "%s", "fullName": "Nimal Perera", "password": "%s",
+                                 "companyId": "%s", "companyRole": "ACCOUNTANT", "platformRole": "SYSTEM_ADMIN"}
+                                """.formatted(email, PASSWORD, companyId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.platformRole").doesNotExist());
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT platform_role FROM users WHERE email = ?", String.class, email)).isEqualTo("USER");
+    }
+
     private ResultActions register(String email, CompanyRole role, UUID companyId) throws Exception {
         return mockMvc.perform(post(REGISTRATIONS_URL)
                 .contentType(MediaType.APPLICATION_JSON)

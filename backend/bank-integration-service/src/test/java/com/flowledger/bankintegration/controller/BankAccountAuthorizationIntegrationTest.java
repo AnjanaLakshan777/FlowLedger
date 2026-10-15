@@ -68,10 +68,9 @@ class BankAccountAuthorizationIntegrationTest {
         identityService.reset();
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {"COMPANY_ADMIN", "FINANCE_CONTROLLER"})
-    void shouldLetAdminAndFinanceControllerCreateAndReadAccounts(String role) throws Exception {
-        identityService.grant(companyId, role);
+    @Test
+    void shouldLetCompanyAdminConfigureAndReadAccounts() throws Exception {
+        identityService.grant(companyId, "COMPANY_ADMIN");
 
         String accountId = JsonPath.read(
                 create().andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
@@ -80,16 +79,56 @@ class BankAccountAuthorizationIntegrationTest {
         list().andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
     }
 
-    @Test
-    void shouldLetAccountantViewButNotCreateAccounts() throws Exception {
+    // In the UI permission matrix only the administrator configures bank integration.
+    @ParameterizedTest
+    @ValueSource(strings = {"FINANCE_CONTROLLER", "ACCOUNTANT"})
+    void shouldLetFinanceRolesViewButNotConfigureAccounts(String role) throws Exception {
         UUID accountId = insertAccount();
-        identityService.grant(companyId, "ACCOUNTANT");
+        identityService.grant(companyId, role);
 
         list().andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
         read(accountId.toString()).andExpect(status().isOk());
         create().andExpect(status().isForbidden());
 
         assertThat(countAccounts()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldLetSystemAdminConfigureAndReadAccountsOfAnyCompanyWithoutMembership() throws Exception {
+        identityService.grantPlatformAdmin(companyId);
+
+        String accountId = JsonPath.read(
+                create().andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+
+        read(accountId).andExpect(status().isOk());
+        list().andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
+
+        UUID secondCompany = UUID.randomUUID();
+        identityService.grantPlatformAdmin(secondCompany);
+        mockMvc.perform(post("/api/v1/bank-integration/companies/" + secondCompany + "/bank-accounts")
+                        .with(userToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(CREATE_REQUEST))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.companyId").value(secondCompany.toString()));
+    }
+
+    // identity-service reports no platform access for an inactive system admin or an inactive or
+    // unknown company (tested in identity-service); a company admin elsewhere is simply denied.
+    @Test
+    void shouldDenySystemAdminWhenIdentityServiceDoesNotAllowCompany() throws Exception {
+        create().andExpect(status().isForbidden());
+        list().andExpect(status().isForbidden());
+
+        assertThat(countAccounts()).isZero();
+    }
+
+    @Test
+    void shouldNotTreatPlatformAdminFlagAsAccessWhenNotAllowed() throws Exception {
+        identityService.reply(companyId, 200, "{\"allowed\":false,\"companyRole\":null,\"platformAdmin\":true}");
+
+        create().andExpect(status().isForbidden());
+        assertThat(countAccounts()).isZero();
     }
 
     @Test
@@ -120,7 +159,7 @@ class BankAccountAuthorizationIntegrationTest {
 
     @Test
     void shouldDenyWhenAllowedAnswerHasNoRole() throws Exception {
-        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null}");
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null,\"platformAdmin\":false}");
 
         list().andExpect(status().isForbidden());
     }
@@ -156,9 +195,18 @@ class BankAccountAuthorizationIntegrationTest {
 
     @Test
     void shouldFailClosedWhenIdentityServiceReturnsUnknownRole() throws Exception {
-        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"SUPER_ADMIN\"}");
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"SUPER_ADMIN\",\"platformAdmin\":false}");
 
         list().andExpect(status().isServiceUnavailable());
+    }
+
+    // An answer that does not state platformAdmin is not a valid answer, and grants nothing.
+    @Test
+    void shouldFailClosedWhenIdentityServiceAnswerOmitsPlatformAdmin() throws Exception {
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"COMPANY_ADMIN\"}");
+
+        create().andExpect(status().isServiceUnavailable());
+        assertThat(countAccounts()).isZero();
     }
 
     @Test

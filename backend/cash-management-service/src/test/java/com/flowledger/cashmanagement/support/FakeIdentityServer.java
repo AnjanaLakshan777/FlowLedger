@@ -29,7 +29,7 @@ public final class FakeIdentityServer {
             Pattern.compile("/internal/v1/identity/companies/([^/]+)/membership");
     private static final Runnable NOTHING = () -> { };
     private static final Reply DENIED =
-            new Reply(200, "{\"allowed\":false,\"companyRole\":null}", Duration.ZERO, NOTHING);
+            new Reply(200, "{\"allowed\":false,\"companyRole\":null,\"platformAdmin\":false}", Duration.ZERO, NOTHING);
     private static final FakeIdentityServer INSTANCE = new FakeIdentityServer();
 
     private final HttpServer server;
@@ -68,6 +68,11 @@ public final class FakeIdentityServer {
 
     public void grant(UUID companyId, String companyRole) {
         reply(companyId, 200, allowedBody(companyRole));
+    }
+
+    // An active system admin without a membership in the company.
+    public void grantPlatformAdmin(UUID companyId) {
+        reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null,\"platformAdmin\":true}");
     }
 
     public void reply(UUID companyId, int status, String body) {
@@ -120,7 +125,7 @@ public final class FakeIdentityServer {
     }
 
     private static String allowedBody(String companyRole) {
-        return "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\"}";
+        return "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}";
     }
 
     private record Reply(int status, String body, Duration delay, Runnable whileCallerWaits) {

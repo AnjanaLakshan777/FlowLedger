@@ -149,7 +149,7 @@ class DailySaleAuthorizationIntegrationTest {
 
     @Test
     void shouldDenyWhenAllowedAnswerHasNoRole() throws Exception {
-        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null}");
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null,\"platformAdmin\":false}");
 
         create().andExpect(status().isForbidden());
         assertThat(countSales()).isZero();
@@ -187,10 +187,41 @@ class DailySaleAuthorizationIntegrationTest {
 
     @Test
     void shouldFailClosedWhenIdentityServiceReturnsUnknownRole() throws Exception {
-        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"SUPER_ADMIN\"}");
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"SUPER_ADMIN\",\"platformAdmin\":false}");
 
         create().andExpect(status().isServiceUnavailable());
         assertThat(countSales()).isZero();
+    }
+
+    // An answer that does not state platformAdmin is not a valid answer, and grants nothing.
+    @Test
+    void shouldFailClosedWhenIdentityServiceAnswerOmitsPlatformAdmin() throws Exception {
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"ACCOUNTANT\"}");
+
+        create().andExpect(status().isServiceUnavailable());
+        assertThat(countSales()).isZero();
+    }
+
+    // Confirmed: a system admin administers companies but has no access to daily sales without a
+    // membership in the company.
+    @Test
+    void shouldGiveSystemAdminWithoutMembershipNoAccessToDailySales() throws Exception {
+        UUID existingSaleId = insertSale(yesterday.minusDays(1));
+        identityService.grantPlatformAdmin(companyId);
+
+        create().andExpect(status().isForbidden());
+        list().andExpect(status().isForbidden());
+        read(existingSaleId.toString()).andExpect(status().isForbidden());
+
+        assertThat(countSales()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldGiveSystemAdminWhoIsAlsoAMemberThatMembershipsAccess() throws Exception {
+        identityService.reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"ACCOUNTANT\",\"platformAdmin\":true}");
+
+        create().andExpect(status().isCreated());
+        list().andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
     }
 
     @Test

@@ -40,10 +40,23 @@ public class CompanyAccessVerifier {
         this.internalApiSecret = secret;
     }
 
+    // Company operations: only an active member of the company whose role is permitted.
     public void verify(Jwt user, UUID companyId, Set<CompanyRole> permittedRoles) {
+        verify(user, companyId, permittedRoles, false);
+    }
+
+    // Company administration that a system admin may also perform, in any active company.
+    public void verifyOrPlatformAdmin(Jwt user, UUID companyId, Set<CompanyRole> permittedRoles) {
+        verify(user, companyId, permittedRoles, true);
+    }
+
+    private void verify(Jwt user, UUID companyId, Set<CompanyRole> permittedRoles, boolean platformAdminPermitted) {
         MembershipAuthorization authorization = fetchMembership(user, companyId);
 
-        if (!authorization.allowed() || !permittedRoles.contains(authorization.companyRole())) {
+        boolean permitted = authorization.allowed()
+                && (permittedRoles.contains(authorization.companyRole())
+                || platformAdminPermitted && authorization.platformAdmin());
+        if (!permitted) {
             throw new CompanyAccessDeniedException();
         }
     }

@@ -27,7 +27,7 @@ public final class FakeIdentityServer {
 
     private static final Pattern MEMBERSHIP_PATH =
             Pattern.compile("/internal/v1/identity/companies/([^/]+)/membership");
-    private static final Reply DENIED = new Reply(200, "{\"allowed\":false,\"companyRole\":null}", Duration.ZERO);
+    private static final Reply DENIED = new Reply(200, "{\"allowed\":false,\"companyRole\":null,\"platformAdmin\":false}", Duration.ZERO);
     private static final FakeIdentityServer INSTANCE = new FakeIdentityServer();
 
     private final HttpServer server;
@@ -65,7 +65,12 @@ public final class FakeIdentityServer {
     }
 
     public void grant(UUID companyId, String companyRole) {
-        reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\"}");
+        reply(companyId, 200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}");
+    }
+
+    // An active system admin without a membership in the company.
+    public void grantPlatformAdmin(UUID companyId) {
+        reply(companyId, 200, "{\"allowed\":true,\"companyRole\":null,\"platformAdmin\":true}");
     }
 
     public void reply(UUID companyId, int status, String body) {
@@ -73,7 +78,7 @@ public final class FakeIdentityServer {
     }
 
     public void grantAfterDelay(UUID companyId, String companyRole, Duration delay) {
-        replies.put(companyId, new Reply(200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\"}", delay));
+        replies.put(companyId, new Reply(200, "{\"allowed\":true,\"companyRole\":\"" + companyRole + "\",\"platformAdmin\":false}", delay));
     }
 
     public String lastServiceKey() {

@@ -38,6 +38,13 @@ public class User {
     @Column(name = "account_status", nullable = false, length = 20)
     private AccountStatus accountStatus;
 
+    // Read-only for the application: new users get the database default USER, and no code path
+    // writes it, so the API can never grant SYSTEM_ADMIN.
+    @Generated
+    @Enumerated(EnumType.STRING)
+    @Column(name = "platform_role", nullable = false, length = 30, updatable = false)
+    private PlatformRole platformRole;
+
     @Generated
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -51,5 +58,9 @@ public class User {
         this.fullName = fullName;
         this.passwordHash = passwordHash;
         this.accountStatus = accountStatus;
+    }
+
+    public boolean isActivePlatformAdmin() {
+        return accountStatus == AccountStatus.ACTIVE && platformRole == PlatformRole.SYSTEM_ADMIN;
     }
 }

@@ -12,7 +12,10 @@ import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CurrentTimestamp;
 import org.hibernate.annotations.Generated;
+import org.hibernate.annotations.SourceType;
+import org.hibernate.generator.EventType;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -48,7 +51,8 @@ public class CompanyMembership {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Generated
+    // Memberships change role and status, so the timestamp is set by the database on every write.
+    @CurrentTimestamp(event = {EventType.INSERT, EventType.UPDATE}, source = SourceType.DB)
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -56,6 +60,25 @@ public class CompanyMembership {
         this.company = company;
         this.user = user;
         this.companyRole = companyRole;
+        this.status = status;
+    }
+
+    // Access needs the membership, the user's account and the company to be active.
+    public boolean grantsCompanyAccess() {
+        return status == MembershipStatus.ACTIVE
+                && user.getAccountStatus() == AccountStatus.ACTIVE
+                && company.getStatus() == CompanyStatus.ACTIVE;
+    }
+
+    public boolean isActiveCompanyAdmin() {
+        return status == MembershipStatus.ACTIVE && companyRole == CompanyRole.COMPANY_ADMIN;
+    }
+
+    public void changeRole(CompanyRole companyRole) {
+        this.companyRole = companyRole;
+    }
+
+    public void changeStatus(MembershipStatus status) {
         this.status = status;
     }
 }
