@@ -670,14 +670,14 @@ follow the finalized UI and must be reviewed before production.
 
 ### Known Limitations
 
-- No consumer yet: until a queue is bound to `flowledger.payment` (the
-  forecast consumer), every new cheque event is unroutable and stays pending,
-  retried with backoff. Nothing is lost, but nothing is delivered either.
-- Consumers must deduplicate on the message ID (at-least-once delivery) and
-  ignore older cheque versions. The forecast's `processed_events` table
-  (schema section 7.8) is meant for this.
-- No dead-letter handling or alert yet for events that keep failing; they
-  stay pending and are visible through `attempt_count` and `last_error`.
+- The only consumer is forecast-service (section 10, Cheque Event Consumer).
+  Its queue is declared when forecast-service first connects to the broker;
+  until then every new cheque event is unroutable and stays pending, retried
+  with backoff. Nothing is lost, but nothing is delivered either.
+- Every consumer must deduplicate on the message ID (at-least-once delivery)
+  and ignore older cheque versions, as forecast-service does.
+- No alert yet for events that keep failing to publish; they stay pending and
+  are visible through `attempt_count` and `last_error`.
 - No audit-history read API.
 - Listing is not paginated.
 - The JWT validation, identity client, and authorization code is also
@@ -699,10 +699,11 @@ confirmed.
   `expected_cheque_count` on days; `source_version` on run cheques. Expected
   inflow columns are nullable (schema v1: NOT NULL default 0), because
   "not estimated" must not be stored as zero.
-- Not created yet: the projection tables and `processed_events` (no event
-  consumer exists; inputs are read through APIs), `calendar_holidays` (no
-  verified holiday source), and an audit or outbox table (schema section 9
-  removes them from the MVP).
+- Not created yet: the bank and sales projection tables, `calendar_holidays`
+  (no verified holiday source), and an audit or outbox table (schema section
+  9 removes them from the MVP). `forecast_cheques` and `processed_events`
+  were added later (see Cheque Event Consumer); runs still read their inputs
+  through the APIs.
 - API under `/api/v1/forecast/companies/{companyId}/forecast-runs`: `POST`
   (create a run), `GET` (list), `GET /{runId}` (run with its 84 days and the
   cheques used), and `GET /{runId}/forecast-vs-actual`.
@@ -770,6 +771,106 @@ confirmed.
 - Differences are actual minus forecast. If the run did not estimate
   inflows, inflow differences are null.
 
+### Cheque Event Consumer (RabbitMQ)
+
+- Confirmed for this milestone: forecast-service consumes payment-service's
+  `ChequeIssued`, `ChequeUpdated`, and `ChequeCancelled` events and keeps
+  its own copy of the cheques in `forecast_cheques`. It never reads
+  payment-service's database. Forecast calculations, saved runs, and their
+  cheque snapshots are unchanged and do not read the projection yet; a run
+  still reads cheques from the payment API.
+- Migration `V2__create_cheque_projection_and_processed_events.sql` (additive)
+  creates `forecast_cheques` (one row per cheque: company, bank account,
+  number, category, amount, issue and expected clearing dates, status,
+  `source_version`, `source_event_created_at`, `last_event_id`,
+  `projected_at`) and `processed_events` (event ID, source service, event
+  type, time, and a result summary with the outcome, cheque ID, and version
+  only). Payee and notes are not in the events and are not stored.
+- Timestamps: `source_event_created_at` is the AMQP timestamp, i.e. when
+  payment-service wrote the outbox event (its transaction start). It is not
+  the cheque's business update time, which the events do not carry, so the
+  schema document's `source_updated_at` is not used. It is null if a
+  message has no timestamp. `projected_at` is when forecast-service applied
+  the event.
+- Topology (declared by forecast-service, names configurable): binding
+  `cheque.*` from the durable topic exchange `flowledger.payment` to the
+  durable quorum queue `forecast.payment-cheque-events`, whose dead-letter
+  exchange `forecast.payment-cheque-events.dlx` routes to the quorum queue
+  `forecast.payment-cheque-events.dlq`. The queue's delivery limit (5) moves
+  a message that keeps coming back unacknowledged, for example because the
+  service crashes on it, to the dead-letter queue.
+- Validation, before anything is written: `schemaVersion` header exactly 1;
+  `eventType` one of the three types (and equal to the AMQP type when
+  present); JSON content; message ID, `aggregateId`, `companyId`,
+  `chequeId`, and `bankAccountId` are UUIDs; payload `chequeId` equals
+  `aggregateId` and payload `companyId` equals the `companyId` header;
+  cheque number digits only; known category; amount a positive plain decimal
+  string with at most 2 decimals that fits NUMERIC(19, 2); ISO dates with the
+  clearing date not before the issue date; status `CANCELLED` for
+  `ChequeCancelled` and `ISSUED` otherwise; integer `version` of at least
+  1; body at most 16 KB. Unknown extra fields are ignored and never stored.
+- One transaction per event: insert the event ID into `processed_events`
+  (`ON CONFLICT DO NOTHING`; already there means a duplicate and nothing
+  else happens), then insert or update the cheque only if the stored
+  `source_version` is lower and the stored company is the same, then store
+  the outcome. Outcomes: `APPLIED`, `STALE` (the same or a newer version is
+  already projected; nothing changes), `DUPLICATE`. A cheque already
+  projected for another company is rejected and the transaction rolled back.
+  The event ID's primary key and the cheque row lock serialise concurrent
+  deliveries of the same event or cheque.
+- Acknowledgement is manual and only after the commit. Applied, stale, and
+  duplicate events are acknowledged. If the acknowledgement is lost after
+  the commit, the redelivered event is found in `processed_events` and
+  acknowledged as a duplicate.
+- Invalid or unsupported messages and tenant conflicts are rejected without
+  requeue and go to the dead-letter queue at once. Other failures (for
+  example the database being unavailable) are retried in the listener up to
+  4 attempts with 500 ms, 1 s, 2 s backoff (capped at 5 s), each attempt in a
+  new transaction, then dead-lettered. Messages are never requeued in a loop;
+  only a shutdown during the backoff returns the message to the queue.
+- Logs contain only the message ID, event type, cheque ID, outcome, and a
+  short reason (a validation message naming the field, or an exception class
+  name); never payload values, amounts, cheque numbers, or database error
+  text.
+- `CHEQUE_EVENTS_CONSUMER_ENABLED=false` stops the listener (default
+  `true`). If RabbitMQ is down, forecast-service still starts and serves
+  forecasts; the listener keeps reconnecting.
+
+### Cheque Projection Backfill (design only, not implemented)
+
+The consumer only sees events published after payment-service's activation
+boundary; cheques created earlier (and the seven unpublished development
+events) are not in the projection. Forecasts must not switch to the
+projection until it has been backfilled and checked. Proposed approach:
+
+- Read every company's cheques from the existing payment API, `GET
+  /api/v1/payment/companies/{companyId}/cheques` (all statuses), and apply
+  each one with the same guarded upsert as the consumer: insert, or update
+  only when the API's `version` is higher than the stored
+  `source_version` and the company matches. The API's `version` is the same
+  cheque column the events carry. `payeeName`, `notes`, and the audit
+  fields in the response are dropped; `source_event_created_at` stays null,
+  and `last_event_id` needs a marker for backfilled rows (it is NOT NULL),
+  for example a fixed, documented "backfill" UUID, or the column made
+  nullable by a later migration.
+- Backfill rows are not written to `processed_events` (there is no event
+  ID), so later events for the same cheque are still applied.
+- Concurrent events: run the backfill while the consumer runs. The version
+  guard makes the order irrelevant: if an event with a newer version was
+  applied first, the older API row is ignored; if the API row is newer than
+  a delayed event, the event is `STALE` when it arrives. Equal versions hold
+  the same data. A cheque changed after its API read arrives later as an
+  event with a higher version.
+- Limitations to solve first: the endpoint has no pagination (one response
+  per company with all its cheques); it needs a user JWT with a permitted
+  role in that company, but a backfill is a system job, so it needs a service
+  identity or an internal endpoint; forecast-service cannot list companies,
+  so the set of companies must come from identity-service; completeness
+  cannot be proven from the API alone (no total count, cut-off, or
+  checksum), so compare counts per company and status with payment-service
+  before relying on the projection; and a cheque deleted in payment-service
+  (not currently possible) would never be removed.
+
 ### Authorization
 
 - `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, and `ACCOUNTANT` may create, list,
@@ -796,6 +897,13 @@ confirmed.
   payment, forecast, cash-management) with test data.
 - Runs are created on request only; there are no scheduled or data-change
   runs and no outbox events.
+- The cheque projection is not used by calculations and is not backfilled,
+  so it only holds cheques changed after payment-service's outbox activation
+  boundary. Dead-lettered messages are only stored; there is no alert,
+  inspection API, or replay tool. Only one consumer instance was tested
+  (more instances are safe through the database guards, but per-cheque order
+  is then only protected by the version check). Bank-integration events are
+  not consumed.
 - The JWT validation, identity client, and authorization code is duplicated
   here as well.
 
@@ -912,8 +1020,9 @@ retry; the frontend never falls back to demonstration data.
   defaults), and the frontend build variable `VITE_API_BASE_URL`. `VITE_`
   variables are visible in the browser and must never hold secrets.
 - RabbitMQ: `RABBITMQ_USERNAME` and `RABBITMQ_PASSWORD` (required by
-  compose.yaml and payment-service), optional `RABBITMQ_HOST`,
-  `RABBITMQ_PORT`, and `OUTBOX_PUBLISHER_ENABLED`.
+  compose.yaml, payment-service, and forecast-service), optional
+  `RABBITMQ_HOST`, `RABBITMQ_PORT`, `OUTBOX_PUBLISHER_ENABLED`
+  (payment-service), and `CHEQUE_EVENTS_CONSUMER_ENABLED` (forecast-service).
 
 ### Production Requirements
 
@@ -939,10 +1048,13 @@ The following must be researched or agreed before implementation:
 - Verified official source and update process for Sri Lankan bank holidays.
 - Forecast estimation algorithm and its validation against historical data.
 - Business rules for forecast treatment of bank holidays.
-- Outbox publishing for bank-integration-service, the forecast consumer and
-  its queue bindings, dead-lettering and alerting for events that keep
-  failing, and production broker setup (TLS, users and permissions per
-  service, high availability).
+- Outbox publishing for bank-integration-service, alerting and a replay
+  procedure for dead-lettered or long-pending events, and production broker
+  setup (TLS, users and permissions per service, high availability).
+- When forecasts switch from the payment API to the cheque projection, and
+  how the backfill authenticates, finds all companies, and proves
+  completeness (see Cheque Projection Backfill).
+- Retention of `processed_events` rows (currently kept forever).
 - Exact audit retention and access requirements.
 - Company roles permitted through self-registration, the membership approval
   workflow, and whether to add an approval-pending membership status.

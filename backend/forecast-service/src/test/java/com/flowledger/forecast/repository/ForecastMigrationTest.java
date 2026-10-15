@@ -147,6 +147,48 @@ class ForecastMigrationTest {
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    @Test
+    void shouldApplyChequeProjectionMigration() {
+        Map<String, Object> migration = jdbcTemplate.queryForMap(
+                "SELECT version, success FROM flyway_schema_history WHERE script = ?",
+                "V2__create_cheque_projection_and_processed_events.sql");
+
+        assertThat(migration.get("version")).isEqualTo("2");
+        assertThat(migration.get("success")).isEqualTo(true);
+    }
+
+    @ParameterizedTest(name = "number {0}, amount {1}, status {2}, version {3}, clearing {4}")
+    @CsvSource({
+            "12A, 10.00, ISSUED, 1, 2026-10-20",
+            "123, 0.00, ISSUED, 1, 2026-10-20",
+            "123, 10.00, CLEARED, 1, 2026-10-20",
+            "123, 10.00, ISSUED, 0, 2026-10-20",
+            "123, 10.00, ISSUED, 1, 2026-10-14"
+    })
+    void shouldRejectInvalidProjectedCheques(String number, String amount, String status, int version,
+                                             String clearingDate) {
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                        INSERT INTO forecast_cheques (cheque_id, company_id, bank_account_id, cheque_number, category,
+                            amount, issue_date, expected_clearing_date, status, source_version, last_event_id)
+                        VALUES (?, ?, ?, ?, 'TAX', ?::numeric, DATE '2026-10-15', ?::date, ?, ?, ?)
+                        """,
+                UUID.randomUUID(), companyId, UUID.randomUUID(), number, amount, clearingDate, status, version,
+                UUID.randomUUID()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void shouldRecordAnEventIdOnlyOnce() {
+        UUID eventId = UUID.randomUUID();
+        String insert = """
+                INSERT INTO processed_events (event_id, source_service, event_type)
+                VALUES (?, 'payment-service', 'ChequeIssued')
+                """;
+        jdbcTemplate.update(insert, eventId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update(insert, eventId)).isInstanceOf(DuplicateKeyException.class);
+    }
+
     private UUID insertConfig(int version, boolean active) {
         return jdbcTemplate.queryForObject("""
                         INSERT INTO forecast_model_configs (company_id, version, is_active, horizon_days, method_code,
