@@ -82,6 +82,33 @@ export interface ForecastVsActual {
   totals: { daysCompared: number; unclassifiedTransactionCount: number; unclassifiedTransactionAmount: number }
 }
 
+/** Historical sales import (cash-management-service). Amounts in LKR; totals cover valid rows only. */
+export type SalesImportStatus = "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "INVALID"
+
+export interface ApiSalesImport {
+  id: string; fileName: string; status: SalesImportStatus; fileError: string | null
+  periodStart: string | null; periodEnd: string | null
+  rowCount: number; validRowCount: number; invalidRowCount: number; duplicateRowCount: number
+  cashSalesTotal: number; cardSalesTotal: number
+  uploadedBy: string; uploadedAt: string
+  approvedBy: string | null; approvedAt: string | null; approvalNote: string | null
+  importedRowCount: number | null; excludedRowCount: number | null
+  rejectedBy: string | null; rejectedAt: string | null; rejectionReason: string | null
+  version: number
+}
+
+export interface ApiSalesImportRow {
+  rowNumber: number; saleDate: string | null; cashSalesAmount: number | null; cardSalesAmount: number | null
+  status: "VALID" | "INVALID" | "DUPLICATE"; duplicateDate: boolean
+  errors: { field: string; code: string; message: string }[]
+  /** The cells as written, for rows that are not valid. */
+  raw: Record<string, string> | null
+}
+
+export interface ApiSalesImportDetail { batch: ApiSalesImport; rows: ApiSalesImportRow[] }
+
+export interface ApiSalesImportOverview { canUpload: boolean; canApprove: boolean; ownImportsOnly: boolean; imports: ApiSalesImport[] }
+
 const identity = "/api/v1/identity"
 const cash = (c: string) => `/api/v1/cash-management/companies/${c}`
 const bank = (c: string) => `/api/v1/bank-integration/companies/${c}`
@@ -96,6 +123,18 @@ export const flowledger = {
   sales: (c: string) => api<ApiDailySale[]>(`${cash(c)}/sales`),
   recordSale: (c: string, saleDate: string, cashSalesAmount: number, cardSalesAmount: number) =>
     api<ApiDailySale>(`${cash(c)}/sales`, { method: "POST", json: { saleDate, cashSalesAmount, cardSalesAmount } }),
+
+  salesImports: (c: string) => api<ApiSalesImportOverview>(`${cash(c)}/sales-imports`),
+  salesImport: (c: string, id: string) => api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}`),
+  uploadSalesImport: (c: string, file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return api<ApiSalesImportDetail>(`${cash(c)}/sales-imports`, { method: "POST", form })
+  },
+  approveSalesImport: (c: string, id: string, version: number, excludeInvalidRows: boolean, note: string | null) =>
+    api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}/approve`, { method: "POST", json: { version, excludeInvalidRows, note } }),
+  rejectSalesImport: (c: string, id: string, version: number, reason: string) =>
+    api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}/reject`, { method: "POST", json: { version, reason } }),
 
   bankAccounts: (c: string) => api<ApiBankAccount[]>(`${bank(c)}/bank-accounts`),
   latestBalance: (c: string, accountId: string) => api<ApiBalance>(`${bank(c)}/bank-accounts/${accountId}/balance-snapshots/latest`),

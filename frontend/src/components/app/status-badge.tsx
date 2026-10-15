@@ -23,6 +23,10 @@ const MAP: Record<string, { variant: Variant; label?: string; icon?: "check" | "
   Deactivated: { variant: "muted" },
   Backdated: { variant: "outline" },
   "Awaiting approval": { variant: "attention" },
+  // historical sales import
+  Invalid: { variant: "destructive-soft", icon: "x" },
+  Duplicate: { variant: "destructive-soft", icon: "alert" },
+  Imported: { variant: "outline", label: "Historical import" },
   Approved: { variant: "soft", icon: "check" },
   Rejected: { variant: "muted" },
 }

@@ -357,7 +357,9 @@ class DailySaleControllerIntegrationTest {
         List<String> tables = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
                 String.class);
-        assertThat(tables).containsExactly("daily_sales", "flyway_schema_history");
+        // This service owns sales and their imports only; bank deposits live in bank-integration-service.
+        assertThat(tables).containsExactly("cash_management_audit_events", "daily_sales", "flyway_schema_history",
+                "sales_import_batches", "sales_import_rows");
         assertThat(countSales(companyId)).isEqualTo(1);
     }
 

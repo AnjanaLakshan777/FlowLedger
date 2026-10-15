@@ -81,7 +81,7 @@ class DailySalesMigrationTest {
     }
 
     @Test
-    void shouldRejectImportedRowsUntilImportFeatureExists() {
+    void shouldRejectImportedRowsWithoutAnImportBatch() {
         assertThatThrownBy(() -> insert(companyId, SALE_DATE, "100.00", "0.00", "HISTORICAL_IMPORT"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }

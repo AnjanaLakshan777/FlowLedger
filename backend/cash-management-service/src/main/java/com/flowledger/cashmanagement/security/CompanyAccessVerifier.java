@@ -41,11 +41,17 @@ public class CompanyAccessVerifier {
     }
 
     public void verify(Jwt user, UUID companyId, Set<CompanyRole> permittedRoles) {
+        authorize(user, companyId, permittedRoles);
+    }
+
+    /** Like {@link #verify}, and returns the user's role in the company for finer rules. */
+    public CompanyRole authorize(Jwt user, UUID companyId, Set<CompanyRole> permittedRoles) {
         MembershipAuthorization authorization = fetchMembership(user, companyId);
 
         if (!authorization.allowed() || !permittedRoles.contains(authorization.companyRole())) {
             throw new CompanyAccessDeniedException();
         }
+        return authorization.companyRole();
     }
 
     // The user's own token is forwarded so identity-service identifies the user from a token it

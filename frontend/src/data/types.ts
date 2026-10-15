@@ -19,7 +19,7 @@ export interface BankTransaction {
   amount: number; txn_type: string; match_status: MatchStatus; matched_record: string; confidence: number | null; note: string; balance_after: number | null
 }
 export interface DailySale {
-  sales_date: string; cash_sales: number; card_sales: number; total: number; entered_at: string; entered_by: string; entry_type: "Standard" | "Backdated"; note: string
+  sales_date: string; cash_sales: number; card_sales: number; total: number; entered_at: string; entered_by: string; entry_type: "Standard" | "Backdated" | "Imported"; note: string
 }
 export type ChequeCategory = "Supplier Payment" | "Salary" | "Tax" | "Other Expenses"
 /**

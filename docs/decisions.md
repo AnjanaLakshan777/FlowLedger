@@ -158,6 +158,24 @@ Confirmed by the product owner on 2026-10-15:
 - Duplicate dates block approval.
 - Approved historical sales data must feed the forecast.
 
+Confirmed by the product owner with the import feature (2026-10-15):
+
+- Template columns `date`, `cash_sales`, `card_payments`; dates strictly
+  `YYYY-MM-DD`; amounts in LKR.
+- One sales record per company per sale date. Zero is a valid amount and
+  different from a blank (missing) cell. Negative amounts and future sale
+  dates are invalid. Duplicate dates within an import block approval until
+  resolved.
+- Accountants may upload and inspect their imports but not approve them.
+  Finance Controllers may upload, inspect, approve, and reject. Cashiers have
+  no access. The backend enforces roles and company isolation.
+- The uploader, upload time, approver or rejecter, decision time, and an
+  audit history are recorded.
+- Historical sales are sales records, not bank inflows: the sale date is not
+  the bank transaction or deposit date, and imported sales are never counted
+  as actual inflows or double-counted with bank transactions. Bank
+  transactions remain the source of actual cash-flow history.
+
 ### Bank Holidays and Reconciliation
 
 - Sri Lankan bank holidays must come from verified official calendar sources.
@@ -532,9 +550,9 @@ before production.
   rejected with 400 (confirmed rule, section 4).
 - The company comes from the request path, the recording user from the access
   token, and `recorded_at` from the database. Clients cannot set them.
-- Only manual entry (`entry_source = 'UI'`) is allowed. `HISTORICAL_IMPORT`
-  and `import_batch_id` will be added with the historical import feature, so
-  imported rows cannot bypass import approval.
+- The API records manual entry only (`entry_source = 'UI'`). Rows with
+  `HISTORICAL_IMPORT` are written only by an approved import (next section)
+  and must reference that import's batch of the same company.
 
 ### Sale Date, Deposit, and Inflows
 
@@ -570,11 +588,108 @@ before production.
 - Recorded sales cannot be corrected. The table has `updated_by`,
   `updated_at`, and `version` for later corrections, but no update rules are
   defined yet.
-- Sales changes do not yet write to `cash_management_audit_events`, and there
-  is no outbox. A comprehensive audit-event implementation remains outstanding.
+- Manual daily sales entries do not write to `cash_management_audit_events`
+  (imports do), and there is no outbox. A comprehensive audit-event
+  implementation remains outstanding.
 - Listing is not paginated.
 - The JWT validation, identity client, and authorization code is duplicated in
   `bank-integration-service` and `cash-management-service`.
+
+### Historical Sales Import
+
+Implemented in `cash-management-service` with the rules in section 4. Items
+marked provisional are implementation decisions to review.
+
+- Migration `V2__create_sales_import_and_audit_tables.sql` (additive; V1
+  unchanged) creates `sales_import_batches`, `sales_import_rows`, and
+  `cash_management_audit_events` (append-only through triggers), and adds
+  `daily_sales.import_batch_id` with `entry_source` `HISTORICAL_IMPORT`. A
+  composite foreign key keeps an imported sale on a batch of the same
+  company; a check requires the batch exactly for imported rows.
+- Upload: `.csv` only (UTF-8, an optional byte-order mark, comma
+  separated, double quotes allowed), at most 1 MB and 5,000 data rows. The
+  file is validated in memory and not stored; the batch keeps its name, size,
+  and SHA-256. The first row must be exactly `date,cash_sales,card_payments`.
+  Blank lines are ignored; row numbers are file line numbers.
+- XLSX is not supported (provisional): no spreadsheet library is a
+  dependency, Excel stores dates as serial numbers and amounts as binary
+  floating point, so a strict `YYYY-MM-DD`/two-decimal reading would be
+  ambiguous. The screen tells users to save as CSV UTF-8.
+- Row checks: a date that is a real calendar date written as `YYYY-MM-DD`
+  and not after today (`Asia/Colombo`); each amount present, a plain number
+  with at most two decimals and up to 17 integer digits, not negative, no
+  symbols or separators; exactly three values. A blank amount is
+  `MISSING`; `0` is valid. Error messages name the problem, never the
+  value.
+- Duplicates: a date on more than one row of the file (all those rows), or a
+  date that already has sales (a daily sales record, entered or imported, or
+  a valid row of an approved import) is `DUPLICATE`.
+- Batch statuses: `INVALID` (the file cannot be read, has no valid row, or
+  has a duplicate date; it can never be approved; a corrected file must be
+  uploaded), `PENDING_APPROVAL`, `APPROVED`, `REJECTED`. This replaces
+  the schema document's `UPLOADED`/`VALIDATING`/`READY_FOR_APPROVAL`/
+  `FAILED`, because validation runs during the upload request.
+- Rows are `VALID`, `INVALID`, or `DUPLICATE` with a list of
+  `{field, code, message}` errors; the cells as written are kept (shortened
+  to 60 characters) only for rows that are not valid, so they can be shown.
+- The same file (same SHA-256) cannot be waiting or approved twice for a
+  company (409, with the existing import's ID); a unique partial index makes
+  this hold for concurrent uploads too. After rejection, or if invalid, it can
+  be uploaded again.
+- Approval (Finance Controller only): one transaction takes a per-company
+  advisory lock (serialising imports of the company), locks the batch, checks
+  it is still `PENDING_APPROVAL` at the version the approver reviewed
+  (otherwise 409), rechecks every valid date against recorded sales
+  (any overlap: 409 with `conflictingDates`, nothing recorded), inserts the
+  valid rows into `daily_sales` (entry source `HISTORICAL_IMPORT`,
+  `recorded_by` the uploader, `import_batch_id` the batch), marks the batch
+  approved, and writes the audit event. Any failure rolls back everything; a
+  manual entry committed meanwhile for one of the dates is caught by the
+  daily-sales unique constraint and also rolls back the whole approval.
+- Invalid rows (provisional, from the finalised UI design): a batch with
+  invalid but no duplicate rows can be approved only with
+  `excludeInvalidRows: true`; they are then left out and counted
+  (`excludedRowCount`). Without it the request is 400.
+- Days with zero cash and zero card sales are valid and approved, but they
+  are not `daily_sales` records (the schema requires a saved record to hold
+  some sales); they remain valid rows of the approved import and block a
+  later import of the same date. A later manual entry for such a date is not
+  blocked (provisional).
+- Rejection (Finance Controller only) needs a reason (at most 500
+  characters) and the reviewed version; it records who and when.
+- Audit actions `SALES_IMPORT_UPLOADED`, `SALES_IMPORT_APPROVED` (with the
+  note as reason and the counts), `SALES_IMPORT_REJECTED` (with the
+  reason), each in the transaction of its change. Audit data holds statuses,
+  counts, file name, hash, and period, not row values. Logs hold import IDs,
+  statuses, and counts only.
+- Roles (enforced through identity-service's membership check, before any
+  database work): `ACCOUNTANT` uploads and sees only the imports they
+  uploaded (another import is 404); `FINANCE_CONTROLLER` uploads, sees all,
+  approves, and rejects; `COMPANY_ADMIN` sees all but cannot upload or decide
+  (provisional: not covered by the confirmed rules); `CASHIER` and users
+  without membership get 403. The list response says what the user may do
+  (`canUpload`, `canApprove`, `ownImportsOnly`), and the screen shows only
+  those actions. An import of another company is not found.
+- API (under `/api/v1/cash-management/companies/{companyId}`):
+  - `GET /sales-imports` → `{canUpload, canApprove, ownImportsOnly,
+    imports: [batch]}`, newest first.
+  - `POST /sales-imports` (multipart, field `file`) → 201 `{batch, rows}`;
+    400 for no file, a non-CSV name or type, or more than 1 MB; 409 for the
+    same file waiting or approved.
+  - `GET /sales-imports/{importId}` → `{batch, rows}`.
+  - `POST /sales-imports/{importId}/approve` `{version, excludeInvalidRows?,
+    note?}` → `{batch, rows}`.
+  - `POST /sales-imports/{importId}/reject` `{version, reason}` →
+    `{batch, rows}`.
+  - A batch has `id, fileName, status, fileError, periodStart, periodEnd,
+    rowCount, validRowCount, invalidRowCount, duplicateRowCount,
+    cashSalesTotal, cardSalesTotal` (valid rows), `uploadedBy, uploadedAt,
+    approvedBy, approvedAt, approvalNote, importedRowCount,
+    excludedRowCount, rejectedBy, rejectedAt, rejectionReason, version`.
+  - The CSV template is built by the screen (no endpoint).
+- Approved imports produce daily sales only. Nothing is sent to other
+  services (no outbox event): no service consumes historical sales yet (see
+  Forecast Use of Historical Sales).
 
 ## 9. Provisional Payment Rules
 
@@ -1058,6 +1173,28 @@ stored but not used by forecast calculations yet.
 - VERIFIED is a statement about the time of the check. Later changes are
   not tracked against it; forecasts bound its age (next section).
 
+### Forecast Use of Historical Sales (blocked)
+
+- Traced: forecast-service reads no sales data. Its inflow estimate
+  (`WEEKDAY_AVERAGE`) averages `CASH_SALES_DEPOSIT` and
+  `CARD_SALES_SETTLEMENT` bank credits by bank transaction date, and Forecast
+  vs Actual uses the same bank credits as actuals. Daily sales, entered or
+  imported, reach no forecast.
+- Not implemented, deliberately: turning approved historical sales (by sale
+  date) into expected receipts (by deposit or settlement date) needs rules
+  that are not confirmed (section 13): which method uses them (the business
+  direction mentions current-year actuals and last year's corresponding
+  pattern), how sale dates map to deposit and card-settlement dates, how
+  periods covered by both sales records and bank history are combined
+  without double-counting, and what minimum history applies. Inventing these
+  would change financial results. Saved runs, the input digest, and Forecast
+  vs Actual are therefore unchanged, and imported sales can never become
+  actual inflows.
+- When the rules are confirmed, the intended path is an approved-import
+  event from cash-management-service through its own outbox (schema
+  section 4.5) into a forecast-owned sales history, with the source version
+  in the run's input digest; no cross-service database access.
+
 ### Forecast Cheque Source
 
 Confirmed for Feature 2, milestone 4.
@@ -1184,9 +1321,15 @@ retry; the frontend never falls back to demonstration data.
   estimated".
 - Forecast vs Actual compares one saved run, chosen by the user (newest
   first by default), because the baseline-run rule is open.
+- Historical Sales Import is live: template download, CSV upload with the
+  server's validation results, issues and all-rows preview, import history,
+  and approval or rejection for Finance Controllers. Actions follow the
+  server's `canUpload`/`canApprove`, not only the role mapping. Imported
+  daily sales show as "Historical import" on Daily Sales, not as backdated
+  entries. Users' names are not available; the screen shows "You" or
+  "Another user".
 - Not connected (no backend API yet), showing a "Not connected" notice
-  instead of demonstration data: Historical Sales Import and Users &
-  Settings.
+  instead of demonstration data: Users & Settings.
 
 ### Known Limitations
 
@@ -1327,8 +1470,8 @@ The following must be researched or agreed before implementation:
 - Refresh tokens, token revocation, and login rate limiting or lockout.
 - How other services will validate access tokens (asymmetric signing keys,
   gateway validation, or another approach).
-- The permission matrix for features not built yet (historical import
-  approval, forecast, company settings) across services.
+- The permission matrix for features not built yet (company settings)
+  across services.
 - Production-grade service-to-service authentication (for example mTLS) to
   replace the shared `IDENTITY_INTERNAL_API_SECRET`, and whether membership
   answers may be cached and for how long.
@@ -1391,8 +1534,20 @@ The following must be researched or agreed before implementation:
   user signs in again after the access token expires.
 - Whether daily sales may be corrected, whether they carry a note, and
   whether other users may see who recorded them (the API has no name).
-- APIs for historical sales import, inviting or creating users, company
-  settings, and listing companies for a platform administrator.
+- APIs for inviting or creating users, company settings, and listing
+  companies for a platform administrator.
+- Historical sales import: whether an import's invalid rows may be left out
+  at approval (currently yes, explicitly) or must be fixed; whether
+  Accountants should see all imports of the company (currently only their
+  own); whether a Company Admin may upload or approve (currently inspect
+  only); whether the uploader may approve their own import (currently
+  allowed for a Finance Controller); XLSX support; how an approved import is
+  corrected or reversed; whether a manual daily sale may later be entered for
+  a day an approved import recorded as zero; and how users' names reach the
+  screen.
+- How approved historical sales feed the forecast (Forecast Use of
+  Historical Sales): method, sale-to-deposit mapping, overlap with bank
+  history, and minimum history.
 - The sample bank statement in the bank-integration test resources contains
   personal data (names, a phone number, deposit references) and is already
   in the Git history; whether to replace it with an anonymized fixture and

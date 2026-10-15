@@ -1,6 +1,7 @@
 package com.flowledger.cashmanagement.entity;
 
-// HISTORICAL_IMPORT is added with the historical sales import feature.
+// UI: entered on the Daily Sales screen. HISTORICAL_IMPORT: from an approved sales import batch.
 public enum EntrySource {
-    UI
+    UI,
+    HISTORICAL_IMPORT
 }

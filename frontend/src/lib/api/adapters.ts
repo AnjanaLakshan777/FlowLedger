@@ -61,7 +61,8 @@ export function toDailySale(s: ApiDailySale, currentUserId: string | null): Dail
     entered_at: enteredAt,
     // The sales API returns the recording user's ID only, not a name.
     entered_by: s.recordedBy === currentUserId ? "You" : "Another user",
-    entry_type: daysBetween(s.saleDate, enteredAt.slice(0, 10)) >= 2 ? "Backdated" : "Standard",
+    // Imported history is entered long after the sale date by design; it is not a backdated entry.
+    entry_type: s.entrySource === "HISTORICAL_IMPORT" ? "Imported" : daysBetween(s.saleDate, enteredAt.slice(0, 10)) >= 2 ? "Backdated" : "Standard",
     note: "",
   }
 }

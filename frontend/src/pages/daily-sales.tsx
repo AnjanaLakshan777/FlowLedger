@@ -168,6 +168,7 @@ export default function DailySalesPage() {
               <SelectContent>
                 <SelectItem value="all">All entries</SelectItem>
                 <SelectItem value="Backdated">Backdated only</SelectItem>
+                <SelectItem value="Imported">Historical imports only</SelectItem>
               </SelectContent>
             </Select>
           </CardContent>
@@ -184,7 +185,7 @@ export default function DailySalesPage() {
               { key: "total", header: "Total (LKR)", numeric: true, sortValue: (r) => r.total, cell: (r) => <b className="font-semibold">{fmt.amt(r.total)}</b> },
               { key: "entered", header: "Entry timestamp", sortValue: (r) => r.entered_at, cell: (r) => <span className="text-muted-foreground whitespace-nowrap">{fmt.dateTime(r.entered_at)}</span> },
               { key: "by", header: "Entered by", sortValue: (r) => r.entered_by, cell: (r) => r.entered_by },
-              { key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (r.entry_type === "Backdated" ? <StatusBadge status="Backdated" /> : <span className="text-muted-foreground">On time</span>) },
+              { key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (r.entry_type === "Standard" ? <span className="text-muted-foreground">On time</span> : <StatusBadge status={r.entry_type} />) },
               ...(live ? [] : [{ key: "note", header: "Note", cell: (r: DailySale) => <span className="text-muted-foreground">{r.note}</span> }]),
             ]}
             empty="No sales entered yet."
