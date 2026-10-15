@@ -24,9 +24,10 @@ import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
- * Stands in for payment-service's internal cheque scan over real HTTP: keyset pages ordered like
- * PostgreSQL orders UUIDs (their lowercase text), the internal API key check, and injected
- * failures. The scan rules themselves are tested in payment-service.
+ * Stands in for payment-service's internal cheque scan and summary over real HTTP: keyset pages
+ * ordered like PostgreSQL orders UUIDs (their lowercase text), per-company summary figures from the
+ * same cheques, the internal API key check, and injected failures. The rules themselves are tested
+ * in payment-service.
  */
 public final class FakePaymentInternalApi {
 
@@ -42,6 +43,10 @@ public final class FakePaymentInternalApi {
     private volatile int failureStatus = 503;
     private volatile UnaryOperator<Map<String, Object>> pageRewrite = UnaryOperator.identity();
     private volatile Consumer<String> beforeResponse = afterId -> { };
+    private final List<String> requestedSummaries = new CopyOnWriteArrayList<>();
+    private volatile int summaryFailures;
+    private volatile UnaryOperator<Map<String, Object>> summaryRewrite = UnaryOperator.identity();
+    private volatile Runnable beforeSummary = () -> { };
 
     private FakePaymentInternalApi() {
         try {
@@ -74,6 +79,34 @@ public final class FakePaymentInternalApi {
         failureStatus = 503;
         pageRewrite = UnaryOperator.identity();
         beforeResponse = afterId -> { };
+        requestedSummaries.clear();
+        summaryFailures = 0;
+        summaryRewrite = UnaryOperator.identity();
+        beforeSummary = () -> { };
+    }
+
+    public void removeCheque(UUID chequeId) {
+        cheques.remove(chequeId.toString());
+    }
+
+    /** Answers the next {@code times} summary requests with the failure status. */
+    public void failSummary(int times) {
+        summaryFailures = times;
+    }
+
+    /** Changes every summary body before it is sent, to break the contract. */
+    public void rewriteSummary(UnaryOperator<Map<String, Object>> rewrite) {
+        summaryRewrite = rewrite;
+    }
+
+    /** Runs when a summary is requested, before its figures are computed. */
+    public void beforeSummary(Runnable action) {
+        beforeSummary = action;
+    }
+
+    /** The companyId of every summary request in order ("null" for all companies). */
+    public List<String> requestedSummaries() {
+        return List.copyOf(requestedSummaries);
     }
 
     /** Adds or replaces a cheque as the scan returns it; returns its item for later changes. */
@@ -124,6 +157,10 @@ public final class FakePaymentInternalApi {
                 return;
             }
             Map<String, String> query = query(exchange.getRequestURI().getRawQuery());
+            if (exchange.getRequestURI().getPath().endsWith("/summary")) {
+                summary(exchange, query.get("companyId"));
+                return;
+            }
             String afterId = query.getOrDefault("afterId", "null");
             int limit = Integer.parseInt(query.getOrDefault("limit", "100"));
             requestedAfterIds.add(afterId);
@@ -152,6 +189,51 @@ public final class FakePaymentInternalApi {
             beforeResponse.accept(afterId);
             send(exchange, 200, pageRewrite.apply(page));
         }
+    }
+
+    private void summary(HttpExchange exchange, String companyId) throws IOException {
+        requestedSummaries.add(String.valueOf(companyId));
+        if (takeSummaryFailure()) {
+            send(exchange, failureStatus, Map.of("detail", "injected failure"));
+            return;
+        }
+        beforeSummary.run();
+        Map<String, long[]> figures = new java.util.TreeMap<>();
+        for (Map<String, Object> item : cheques.values()) {
+            String owner = (String) item.get("companyId");
+            if (companyId != null && !companyId.equals(owner)) {
+                continue;
+            }
+            long[] f = figures.computeIfAbsent(owner, key -> new long[4]);
+            f[0]++;
+            f["ISSUED".equals(item.get("status")) ? 1 : 2]++;
+            f[3] += ((Number) item.get("version")).longValue();
+        }
+        List<Map<String, Object>> companies = new ArrayList<>();
+        long total = 0;
+        for (Map.Entry<String, long[]> entry : figures.entrySet()) {
+            long[] f = entry.getValue();
+            Map<String, Object> company = new LinkedHashMap<>();
+            company.put("companyId", entry.getKey());
+            company.put("chequeCount", f[0]);
+            company.put("issuedCount", f[1]);
+            company.put("cancelledCount", f[2]);
+            company.put("versionSum", f[3]);
+            companies.add(company);
+            total += f[0];
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("chequeCount", total);
+        body.put("companies", companies);
+        send(exchange, 200, summaryRewrite.apply(body));
+    }
+
+    private synchronized boolean takeSummaryFailure() {
+        if (summaryFailures == 0) {
+            return false;
+        }
+        summaryFailures--;
+        return true;
     }
 
     private synchronized boolean takeFailure(String afterId) {

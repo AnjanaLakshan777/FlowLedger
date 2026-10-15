@@ -74,6 +74,47 @@ class PaymentInternalClientTest {
                 .hasMessage("PAYMENT_INTERNAL_API_SECRET is not set");
     }
 
+    @Test
+    void shouldAcceptAValidSummary() {
+        Map<UUID, PaymentInternalClient.CompanyChequeSummary> summary = PaymentInternalClient.validatedSummary(
+                summary(5L, company(LOW, 3, 2, 1, 4), company(HIGH, 2L, 2L, 0L, 7L)), null);
+
+        assertThat(summary).containsOnlyKeys(LOW, HIGH);
+        assertThat(summary.get(LOW)).isEqualTo(new PaymentInternalClient.CompanyChequeSummary(LOW, 3, 2, 1, 4));
+        assertThat(PaymentInternalClient.validatedSummary(summary(0, new Map[0]), MID)).isEmpty();
+    }
+
+    @Test
+    void shouldRejectSummariesThatBreakTheContract() {
+        assertInvalidSummary(summary(3, company(LOW, 3, 2, 0, 3)), null, "inconsistent");
+        assertInvalidSummary(summary(3, company(LOW, 3, 2, 1, 2)), null, "inconsistent");
+        assertInvalidSummary(summary(0, company(LOW, 0, 0, 0, 0)), null, "inconsistent");
+        assertInvalidSummary(summary(4, company(LOW, 3, 2, 1, 3)), null, "totals");
+        assertInvalidSummary(summary(2, company(LOW, 1, 1, 0, 1), company(LOW, 1, 1, 0, 1)), null, "duplicate");
+        assertInvalidSummary(summary(1, company(LOW, 1, 1, 0, 1)), HIGH, "unexpected companyId");
+        assertInvalidSummary(summary(1, company(LOW, 1, 1, 0, 1.5)), null, "whole");
+        assertInvalidSummary(summary(1, company(LOW, 1, 1, 0, -1)), null, "whole");
+        assertInvalidSummary(Map.of("chequeCount", 0), null, "no companies");
+        assertInvalidSummary(null, null, "no companies");
+    }
+
+    private static void assertInvalidSummary(Map<String, Object> body, UUID companyId, String message) {
+        assertThatThrownBy(() -> PaymentInternalClient.validatedSummary(body, companyId))
+                .isInstanceOf(PaymentInternalClient.ScanFailedException.class)
+                .hasMessageContaining(message);
+    }
+
+    @SafeVarargs
+    private static Map<String, Object> summary(Object total, Map<String, Object>... companies) {
+        return Map.of("chequeCount", total, "companies", List.of(companies));
+    }
+
+    private static Map<String, Object> company(UUID id, Object cheques, Object issued, Object cancelled,
+                                               Object versionSum) {
+        return Map.of("companyId", id.toString(), "chequeCount", cheques, "issuedCount", issued,
+                "cancelledCount", cancelled, "versionSum", versionSum);
+    }
+
     private static void assertInvalid(Map<String, Object> body, UUID afterId, int limit, String message) {
         assertThatThrownBy(() -> PaymentInternalClient.validated(body, afterId, limit))
                 .isInstanceOf(PaymentInternalClient.ScanFailedException.class)

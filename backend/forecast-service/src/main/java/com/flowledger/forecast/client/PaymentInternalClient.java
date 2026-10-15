@@ -7,21 +7,27 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriBuilder;
 
+import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
- * Reads payment-service's internal cheque scan with the service key (no user token). Every page
- * is checked against the scan contract before it is used, so a malformed page can never move the
- * backfill cursor. Items are returned as parsed JSON for the caller's field validation.
+ * Reads payment-service's internal cheque scan and summary with the service key (no user token).
+ * Every page and summary is checked against its contract before it is used, so a malformed page
+ * can never move the backfill cursor and a malformed summary never verifies anything. Items are
+ * returned as parsed JSON for the caller's field validation.
  */
 @Component
 public class PaymentInternalClient {
 
     static final String KEY_HEADER = "X-Internal-Api-Key";
     private static final String SCAN_PATH = "/internal/v1/payment/cheques";
+    private static final String SUMMARY_PATH = "/internal/v1/payment/cheques/summary";
 
     private final RestClient restClient;
     private final String internalApiSecret;
@@ -54,20 +60,46 @@ public class PaymentInternalClient {
         return internalApiSecret != null && !internalApiSecret.isBlank();
     }
 
+    /**
+     * One company's figures in payment-service's cheque summary.
+     */
+    public record CompanyChequeSummary(UUID companyId, long chequeCount, long issuedCount, long cancelledCount,
+                                       long versionSum) {
+    }
+
     public ScanPage fetchPage(UUID afterId, int limit) {
+        Map<String, Object> body = get(uri -> {
+            uri.path(SCAN_PATH).queryParam("limit", limit);
+            if (afterId != null) {
+                uri.queryParam("afterId", afterId);
+            }
+            return uri.build();
+        });
+        return validated(body, afterId, limit);
+    }
+
+    /**
+     * payment-service's cheque summary, for every company with cheques or only the given one. All
+     * figures come from one statement there. A company without cheques has no entry.
+     */
+    public Map<UUID, CompanyChequeSummary> fetchSummary(UUID companyId) {
+        Map<String, Object> body = get(uri -> {
+            uri.path(SUMMARY_PATH);
+            if (companyId != null) {
+                uri.queryParam("companyId", companyId);
+            }
+            return uri.build();
+        });
+        return validatedSummary(body, companyId);
+    }
+
+    private Map<String, Object> get(Function<UriBuilder, URI> uri) {
         if (!configured()) {
             throw new ScanFailedException("PAYMENT_INTERNAL_API_SECRET is not set");
         }
-        Map<String, Object> body;
         try {
-            body = restClient.get()
-                    .uri(uri -> {
-                        uri.path(SCAN_PATH).queryParam("limit", limit);
-                        if (afterId != null) {
-                            uri.queryParam("afterId", afterId);
-                        }
-                        return uri.build();
-                    })
+            return restClient.get()
+                    .uri(uri)
                     .header(KEY_HEADER, internalApiSecret)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
@@ -77,7 +109,50 @@ public class PaymentInternalClient {
         } catch (RestClientException e) {
             throw new ScanFailedException("payment-service unavailable (" + e.getClass().getSimpleName() + ")");
         }
-        return validated(body, afterId, limit);
+    }
+
+    // The summary contract: whole non-negative numbers, ISSUED + CANCELLED = cheques, every version
+    // at least 1, one entry per company, totals adding up, and only the requested company if any.
+    @SuppressWarnings("unchecked")
+    static Map<UUID, CompanyChequeSummary> validatedSummary(Map<String, Object> body, UUID companyId) {
+        if (body == null || !(body.get("companies") instanceof List<?> companies)) {
+            throw new ScanFailedException("Invalid cheque summary: no companies");
+        }
+        long total = count(body.get("chequeCount"));
+        Map<UUID, CompanyChequeSummary> summaries = new LinkedHashMap<>();
+        long sum = 0;
+        for (Object entry : companies) {
+            if (!(entry instanceof Map<?, ?> raw)) {
+                throw new ScanFailedException("Invalid cheque summary: entry is not an object");
+            }
+            Map<String, Object> company = (Map<String, Object>) raw;
+            UUID id = company.get("companyId") instanceof String text ? parse(text) : null;
+            if (id == null || (companyId != null && !companyId.equals(id))) {
+                throw new ScanFailedException("Invalid cheque summary: unexpected companyId");
+            }
+            CompanyChequeSummary summary = new CompanyChequeSummary(id, count(company.get("chequeCount")),
+                    count(company.get("issuedCount")), count(company.get("cancelledCount")),
+                    count(company.get("versionSum")));
+            if (summary.issuedCount() + summary.cancelledCount() != summary.chequeCount()
+                    || summary.versionSum() < summary.chequeCount() || summary.chequeCount() == 0) {
+                throw new ScanFailedException("Invalid cheque summary: inconsistent company figures");
+            }
+            if (summaries.put(id, summary) != null) {
+                throw new ScanFailedException("Invalid cheque summary: duplicate companyId");
+            }
+            sum += summary.chequeCount();
+        }
+        if (sum != total) {
+            throw new ScanFailedException("Invalid cheque summary: totals do not add up");
+        }
+        return summaries;
+    }
+
+    private static long count(Object value) {
+        if ((value instanceof Integer || value instanceof Long) && ((Number) value).longValue() >= 0) {
+            return ((Number) value).longValue();
+        }
+        throw new ScanFailedException("Invalid cheque summary: count is not a whole non-negative number");
     }
 
     // The scan contract: items ascend strictly by ID in the database's order, all after afterId,

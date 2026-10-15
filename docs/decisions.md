@@ -973,9 +973,89 @@ the projection is not verified and not used by calculations.
   no run. Several instances can start it at once: they share the one run in
   progress, and the run-row lock lets only one apply each page.
 - Logs contain run IDs, counts, and short reasons only.
-- Not done yet (milestone 3): comparing the projection with payment-service's
-  summary, a verified state, recording dead-lettered events in the database,
-  and switching forecasts to the projection.
+- Verification is separate (next section); switching forecasts to the
+  projection is not done.
+
+### Cheque Projection Verification
+
+Confirmed for Feature 2, milestone 3. A company's projection is checked
+against payment-service's internal summary (section 9) and forecast's own
+tables; forecast never reads payment-service's database. The result is
+stored but not used by forecast calculations yet.
+
+- Migrations `V4__add_cheque_projection_verification.sql` and
+  `V5__require_dead_letter_count_for_verified.sql` (both additive; V5
+  fixes a V4 check that let a VERIFIED row through without a dead-letter
+  count, because a CHECK on NULL passes) add
+  `cheque_projection_verifications`: one row per company with the latest
+  status, a reason code, the completed backfill run relied on, the
+  projected and payment figures (cheques, ISSUED, CANCELLED, version sum),
+  the dead-letter count, when the projection was read, when checked and
+  verified, and a check count. Constraints require MATCHED, a completed
+  run, payment figures, and a dead-letter count of 0 for VERIFIED.
+- `COMPLETED` (backfill run) and `VERIFIED` (company) are different
+  states in different tables; a run is never marked verified.
+- Order of one check: dead-letter queue count, backfill evidence, the
+  projection's figures in one statement (with the database time just
+  before), then payment-service's summary. Statuses: `VERIFIED`,
+  `RETRY_REQUIRED` (may pass later without action), `NOT_VERIFIED` (needs
+  action). The first problem found decides, in this order:
+  - `NO_COMPLETED_BACKFILL` (NOT_VERIFIED): no backfill run has completed,
+    so cheques from before the outbox boundary may be missing.
+  - `BACKFILL_REJECTIONS` (NOT_VERIFIED): the latest completed run, or a
+    run in progress, rejected an item of this company, or an item whose
+    company is unknown (then every company is blocked).
+  - `DEAD_LETTERS_PRESENT` (NOT_VERIFIED): the cheque-event dead-letter
+    queue holds messages. Their companies are not known without reading
+    them, so every company is blocked until the queue is handled.
+  - `DEAD_LETTER_EVIDENCE_UNAVAILABLE` (RETRY_REQUIRED): the broker cannot
+    be reached or the queue has not been declared.
+  - `SUMMARY_UNAVAILABLE` (RETRY_REQUIRED): the summary failed, or broke
+    its contract (counts not whole and non-negative, ISSUED + CANCELLED not
+    equal to the count, version sum below the count, duplicate or
+    unrequested companies, totals not adding up).
+  - `PROJECTION_AHEAD` (NOT_VERIFIED): more cheques or a higher version sum
+    than payment-service. Impossible while the assumptions below hold.
+  - `PROJECTION_BEHIND` (RETRY_REQUIRED): fewer cheques or a lower version
+    sum: events still pending in payment-service's outbox or in the queue,
+    a change made during the check, or a gap a new backfill run must close.
+  - `STATUS_COUNTS_DIFFER` (NOT_VERIFIED): same count and version sum but a
+    different ISSUED/CANCELLED split. Impossible while the assumptions hold.
+  - `MATCHED` (VERIFIED) otherwise.
+- Safe boundary without a payment-service snapshot: cheques are never
+  deleted, never change company, and their version only grows, and the
+  projection only takes cheques from payment-service (events or scan) at
+  versions it had. The projection, read first, is therefore never ahead of
+  the summary read after it. If both have the same count and version sum,
+  every projected cheque is at payment-service's current version, so the
+  projection equalled payment-service at the summary time. A change made
+  between the two reads makes the summary larger and the check fails, it
+  never passes wrongly. Events still pending (outbox or queue) cannot break
+  a match: they carry versions the projection already has and are STALE.
+- This is evidence under those assumptions, not a record-by-record
+  comparison. Equal figures do not detect a projected cheque with the
+  right version but different data (only possible if payment-service
+  changed a cheque without raising its version), and a projected cheque
+  unknown to payment-service could be hidden by a missing one with the
+  same version. A per-record comparison (the scan against the projection,
+  or a checksum of ID, company, version per company in the summary) would
+  close this; payment-service does not offer a checksum yet.
+- `verifyAll()` checks every company in the summary or the projection;
+  `verifyCompany(id)` uses the summary for that company only (a company
+  without cheques on either side verifies with zero figures). Companies
+  that come out RETRY_REQUIRED are checked again up to
+  `flowledger.cheque-verification.max-attempts` (3) times,
+  `retry-delay` (5 s) apart, in the same pass; NOT_VERIFIED is not
+  retried. Results are stored after every check; a check never overwrites
+  a stored result whose projection was read later, so concurrent checks
+  keep the newest evidence. Checking again is idempotent (one row per
+  company, check count increases).
+- Started after a backfill run started on startup
+  (`CHEQUE_BACKFILL_ON_STARTUP=true`) completes; no API, schedule, or UI
+  yet. Logs contain counts and reason codes only.
+- VERIFIED is a statement about the time of the check. Later changes are
+  not tracked against it; a forecast that relies on it must check again
+  (or bound its age), which is milestone 4's decision.
 
 ### Authorization
 
@@ -1006,8 +1086,8 @@ the projection is not verified and not used by calculations.
 - The cheque projection is not used by calculations and is not verified;
   until a backfill run has completed it only holds cheques changed after
   payment-service's outbox activation boundary. A completed run is not
-  proof of completeness (scan consistency limits, rejected items, events
-  still pending in payment-service's outbox or in the dead-letter queue).
+  proof of completeness; verification (above) is separate and a VERIFIED
+  result only describes the time of the check.
   The backfill has no API or UI to start it, show progress, or list
   rejections; it is started by configuration and read from the database.
   A rejected item is not retried by the same run, only by a new run.
@@ -1141,7 +1221,8 @@ retry; the frontend never falls back to demonstration data.
   without it payment-service refuses every internal request and
   forecast-service's backfill refuses to start; nothing else needs it.
 - `CHEQUE_BACKFILL_ON_STARTUP` (forecast-service, default `false`): start
-  or resume the cheque backfill after startup.
+  or resume the cheque backfill after startup, and verify the projection
+  once the run completes.
 
 ### Production Requirements
 
@@ -1171,8 +1252,17 @@ The following must be researched or agreed before implementation:
   procedure for dead-lettered or long-pending events, and production broker
   setup (TLS, users and permissions per service, high availability).
 - When forecasts switch from the payment API to the cheque projection, and
-  how the projection is verified against payment-service's summary
-  (milestone 3).
+  how old a VERIFIED result may be when a forecast relies on it (milestone
+  4).
+- Missing contracts for stronger verification: a per-company checksum of
+  cheque ID, company, and version in payment-service's summary (record
+  level instead of aggregates), payment-service's outbox lag per company
+  (to tell lag from a gap), and dead-lettered events recorded per company
+  in forecast (so one bad message does not block every company). Who
+  drains and replays the dead-letter queue is also undecided.
+- How verification is started and monitored in production (after each
+  backfill, on a schedule, or on demand) and how long RETRY_REQUIRED may
+  last before someone is alerted.
 - How the backfill should be started and monitored in production (startup
   flag, an internal endpoint, or a scheduled job), and who reviews and
   resolves rejected items.

@@ -268,6 +268,70 @@ class ForecastMigrationTest {
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    @Test
+    void shouldApplyChequeVerificationMigration() {
+        Map<String, Object> migration = jdbcTemplate.queryForMap(
+                "SELECT version, success FROM flyway_schema_history WHERE script = ?",
+                "V4__add_cheque_projection_verification.sql");
+
+        assertThat(migration.get("version")).isEqualTo("4");
+        assertThat(migration.get("success")).isEqualTo(true);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT success FROM flyway_schema_history WHERE script = ?", Boolean.class,
+                "V5__require_dead_letter_count_for_verified.sql")).isTrue();
+    }
+
+    @Test
+    void shouldStoreAVerifiedResultWithItsEvidence() {
+        UUID runId = completedBackfillRun();
+
+        insertVerification("VERIFIED", "MATCHED", runId, 0L, 2L, true);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM cheque_projection_verifications WHERE company_id = ?", String.class, companyId))
+                .isEqualTo("VERIFIED");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "verified without run, VERIFIED, MATCHED, false, 0, 2, true",
+            "verified with dead letters, VERIFIED, MATCHED, true, 1, 2, true",
+            "verified without dead-letter count, VERIFIED, MATCHED, true, , 2, true",
+            "verified without payment figures, VERIFIED, MATCHED, true, 0, , true",
+            "verified without time, VERIFIED, MATCHED, true, 0, 2, false",
+            "verified with a problem, VERIFIED, PROJECTION_BEHIND, true, 0, 2, true",
+            "matched but not verified, RETRY_REQUIRED, MATCHED, true, 0, 2, false",
+            "not verified with time, NOT_VERIFIED, PROJECTION_AHEAD, true, 0, 2, true",
+            "unknown status, COMPLETED, MATCHED, true, 0, 2, false",
+            "unknown reason, NOT_VERIFIED, GUESSED, true, 0, 2, false"
+    })
+    void shouldRejectInconsistentVerifications(String description, String status, String reason, boolean withRun,
+                                               Long deadLetters, Long paymentCount, boolean verifiedAt) {
+        UUID runId = withRun ? completedBackfillRun() : null;
+
+        assertThatThrownBy(() -> insertVerification(status, reason, runId, deadLetters, paymentCount, verifiedAt))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private UUID completedBackfillRun() {
+        return jdbcTemplate.queryForObject(
+                "INSERT INTO cheque_backfill_runs (status, completed_at) VALUES ('COMPLETED', now()) RETURNING id",
+                UUID.class);
+    }
+
+    private void insertVerification(String status, String reason, UUID runId, Long deadLetters, Long paymentCount,
+                                    boolean verifiedAt) {
+        jdbcTemplate.update("""
+                        INSERT INTO cheque_projection_verifications (company_id, status, reason, backfill_run_id,
+                            projected_cheque_count, projected_issued_count, projected_cancelled_count,
+                            projected_version_sum, payment_cheque_count, payment_issued_count, payment_cancelled_count,
+                            payment_version_sum, dead_letter_count, projection_read_at, verified_at)
+                        VALUES (?, ?, ?, ?, 2, 2, 0, 2, ?, ?, ?, ?, ?, now(), CASE WHEN ? THEN now() END)
+                        """,
+                companyId, status, reason, runId, paymentCount, paymentCount, paymentCount == null ? null : 0L,
+                paymentCount, deadLetters, verifiedAt);
+    }
+
     private void insertProjectedCheque(UUID chequeId, String source, UUID eventId) {
         jdbcTemplate.update("""
                         INSERT INTO forecast_cheques (cheque_id, company_id, bank_account_id, cheque_number, category,
