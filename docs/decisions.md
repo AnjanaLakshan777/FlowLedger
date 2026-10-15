@@ -43,6 +43,9 @@ balance, and transaction tables can reference them within the same database.
 `bank-integration-service` has been created with bank account management only
 (see section 7).
 
+`cash-management-service` has been created with daily sales management only
+(see section 8).
+
 ## 4. Confirmed Business Rules
 
 ### Bank Account and Forecast
@@ -66,6 +69,29 @@ balance, and transaction tables can reference them within the same database.
 - Do not classify every bank credit or debit as a sale or cheque.
 - Use explicit transaction classifications, including `OTHER` and
   `UNCLASSIFIED`.
+
+### Daily Sales Records
+
+Confirmed by the product owner on 2026-10-15.
+
+- One daily sales record exists per company per sale date, holding both the
+  cash sales amount and the card sales amount. There is no separate record
+  per sales type. A second record for the same company and date is rejected
+  with 409.
+- Daily sales records have no bank deposit date. Deposit dates and actual
+  bank inflows belong to bank transactions in `bank-integration-service`.
+- A daily sales record never creates, represents, or counts as an actual
+  bank inflow, including when the matching bank transaction has not yet been
+  imported. Actual inflows come only from classified bank transactions and
+  their actual transaction dates.
+- The sale date and the actual bank transaction date are different and must
+  not be assumed to be the same.
+- Sale dates in the future are rejected, using `Asia/Colombo` as the business
+  time zone. Past sale dates are allowed.
+- Every company role (`CASHIER`, `ACCOUNTANT`, `FINANCE_CONTROLLER`,
+  `COMPANY_ADMIN`) can open Daily Sales, record daily sales, and view or list
+  all of its own company's daily sales records, not only the ones the user
+  recorded. Nobody can access another company's records.
 
 ### Cheques
 
@@ -270,7 +296,74 @@ confirmed business rules and must be reviewed before production.
 - Bank account changes do not yet write to `bank_integration_audit_events`,
   and there is no outbox.
 
-## 8. Unresolved Decisions
+## 8. Provisional Cash Management Rules
+
+These rules are implemented in `cash-management-service`. They are not
+confirmed business rules unless they restate section 4, and must be reviewed
+before production.
+
+### Daily Sales
+
+- `daily_sales` is created by migration `V1__create_daily_sales_table.sql`,
+  following section 4.1 of the schema document. `company_id` and
+  `recorded_by` are identity-service IDs stored without cross-service foreign
+  keys.
+- API: `POST` and `GET /api/v1/cash-management/companies/{companyId}/sales`
+  (optional inclusive `from` and `to` sale-date filters, newest first), and
+  `GET .../sales/{saleId}`. There is no update or delete endpoint.
+- One record per company per sale date, holding `cashSalesAmount` and
+  `cardSalesAmount` (`NUMERIC(19,2)`, each at least 0, at most two decimal
+  places). Their total must be greater than 0. A second record for the same
+  date returns 409, from the schema's `UNIQUE (company_id, sale_date)`. This
+  is separate from the duplicate-date rule for historical import approval.
+- Past sale dates are accepted. Sale dates after today in `Asia/Colombo` are
+  rejected with 400 (confirmed rule, section 4).
+- The company comes from the request path, the recording user from the access
+  token, and `recorded_at` from the database. Clients cannot set them.
+- Only manual entry (`entry_source = 'UI'`) is allowed. `HISTORICAL_IMPORT`
+  and `import_batch_id` will be added with the historical import feature, so
+  imported rows cannot bypass import approval.
+
+### Sale Date, Deposit, and Inflows
+
+- Users record sales after the money has been deposited. For example, sales
+  of 50,000 on 2026-10-03 are entered on 2026-10-04, the day the money is
+  credited to the bank. The record stores `sale_date` 2026-10-03; `recorded_at`
+  stores the entry time.
+- `daily_sales` has no bank deposit date, as in the schema document. Creating
+  a sales record does not create a bank transaction or count as a bank inflow.
+  The inflow and its date come from the bank transaction (for example
+  `CASH_SALES_DEPOSIT` on 2026-10-04) in `bank-integration-service`, so the
+  same money is not counted twice.
+
+### Authorization
+
+- Every request is authorized through identity-service's internal membership
+  API, in the same way as bank accounts (section 7): active user, active
+  company, active membership, and a permitted role. Identity-service failures
+  return 503.
+- All four company roles may list, read, and create daily sales for their own
+  company (confirmed rule, section 4).
+- The membership check finishes before any database transaction starts, so a
+  slow identity-service does not hold database connections. Access is checked
+  before request-specific validation such as the date filter, so a user
+  without access always receives 403.
+- Local setup: port 8081; database `flowledger_cash_management` in the
+  `cash-management-db` container on port 5435; password from
+  `CASH_MANAGEMENT_DB_PASSWORD`.
+
+### Known Limitations
+
+- Recorded sales cannot be corrected. The table has `updated_by`,
+  `updated_at`, and `version` for later corrections, but no update rules are
+  defined yet.
+- Sales changes do not yet write to `cash_management_audit_events`, and there
+  is no outbox. A comprehensive audit-event implementation remains outstanding.
+- Listing is not paginated.
+- The JWT validation, identity client, and authorization code is duplicated in
+  `bank-integration-service` and `cash-management-service`.
+
+## 9. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -303,8 +396,18 @@ The following must be researched or agreed before implementation:
 - Whether account types other than `CURRENT`, or more than one active account
   per company, are needed after the MVP, and how a current account is
   replaced or deactivated.
+- Who may correct recorded sales, under what conditions, and how corrections
+  are audited.
+- The UI permission matrix (`frontend/src/lib/permissions.ts`) uses a
+  `SYSTEM_ADMIN` role, while identity-service's company roles use
+  `COMPANY_ADMIN`; how the two map, and whether a separate platform-level
+  administrator exists, is not decided.
+- The UI matrix gives "Configure bank integration" only to `SYSTEM_ADMIN`,
+  while bank-integration-service currently lets `COMPANY_ADMIN` and
+  `FINANCE_CONTROLLER` create bank accounts. Whether creating a bank account
+  counts as configuring bank integration needs to be decided.
 
-## 9. Decision Log Maintenance
+## 10. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.
