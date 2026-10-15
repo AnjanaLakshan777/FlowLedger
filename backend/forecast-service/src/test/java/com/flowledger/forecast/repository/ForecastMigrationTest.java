@@ -189,6 +189,95 @@ class ForecastMigrationTest {
         assertThatThrownBy(() -> jdbcTemplate.update(insert, eventId)).isInstanceOf(DuplicateKeyException.class);
     }
 
+    @Test
+    void shouldApplyChequeBackfillMigration() {
+        Map<String, Object> migration = jdbcTemplate.queryForMap(
+                "SELECT version, success FROM flyway_schema_history WHERE script = ?",
+                "V3__add_cheque_backfill_state.sql");
+
+        assertThat(migration.get("version")).isEqualTo("3");
+        assertThat(migration.get("success")).isEqualTo(true);
+    }
+
+    @Test
+    void shouldStoreBackfilledChequesWithoutAnEventId() {
+        UUID chequeId = UUID.randomUUID();
+        insertProjectedCheque(chequeId, "BACKFILL", null);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT projection_source FROM forecast_cheques WHERE cheque_id = ?", String.class, chequeId))
+                .isEqualTo("BACKFILL");
+    }
+
+    @ParameterizedTest(name = "source {0}, with event ID {1}")
+    @CsvSource({"EVENT, false", "BACKFILL, true", "IMPORT, false"})
+    void shouldKeepTheEventIdConsistentWithTheSource(String source, boolean withEventId) {
+        assertThatThrownBy(() -> insertProjectedCheque(UUID.randomUUID(), source,
+                withEventId ? UUID.randomUUID() : null))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void shouldReadExistingEventRowsAsEventSourced() {
+        UUID chequeId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                        INSERT INTO forecast_cheques (cheque_id, company_id, bank_account_id, cheque_number, category,
+                            amount, issue_date, expected_clearing_date, status, source_version, last_event_id)
+                        VALUES (?, ?, ?, '123', 'TAX', 10.00, DATE '2026-10-15', DATE '2026-10-20', 'ISSUED', 1, ?)
+                        """,
+                chequeId, companyId, UUID.randomUUID(), UUID.randomUUID());
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT projection_source FROM forecast_cheques WHERE cheque_id = ?", String.class, chequeId))
+                .isEqualTo("EVENT");
+    }
+
+    @Test
+    void shouldAllowOnlyOneBackfillRunInProgress() {
+        jdbcTemplate.update("DELETE FROM cheque_backfill_rejections WHERE backfill_run_id IN "
+                + "(SELECT id FROM cheque_backfill_runs WHERE status = 'IN_PROGRESS')");
+        jdbcTemplate.update("DELETE FROM cheque_backfill_runs WHERE status = 'IN_PROGRESS'");
+        jdbcTemplate.update("INSERT INTO cheque_backfill_runs (status, completed_at) VALUES ('COMPLETED', now())");
+        jdbcTemplate.update("INSERT INTO cheque_backfill_runs (status, completed_at) VALUES ('COMPLETED', now())");
+        jdbcTemplate.update("INSERT INTO cheque_backfill_runs (status) VALUES ('IN_PROGRESS')");
+
+        assertThatThrownBy(() -> jdbcTemplate.update("INSERT INTO cheque_backfill_runs (status) VALUES ('IN_PROGRESS')"))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+            "completed without time | INSERT INTO cheque_backfill_runs (status) VALUES ('COMPLETED')",
+            "in progress with completion time | INSERT INTO cheque_backfill_runs (status, completed_at) VALUES ('IN_PROGRESS', now())",
+            "counts do not add up | INSERT INTO cheque_backfill_runs (status, cheques_seen, applied_count) VALUES ('IN_PROGRESS', 2, 1)",
+            "unknown status | INSERT INTO cheque_backfill_runs (status) VALUES ('VERIFIED')"
+    })
+    void shouldRejectInconsistentBackfillRuns(String description, String insert) {
+        jdbcTemplate.update("DELETE FROM cheque_backfill_rejections WHERE backfill_run_id IN "
+                + "(SELECT id FROM cheque_backfill_runs WHERE status = 'IN_PROGRESS')");
+        jdbcTemplate.update("DELETE FROM cheque_backfill_runs WHERE status = 'IN_PROGRESS'");
+
+        assertThatThrownBy(() -> jdbcTemplate.update(insert)).isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void shouldRequireAnExistingRunForARejection() {
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "INSERT INTO cheque_backfill_rejections (backfill_run_id, reason) VALUES (?, 'Invalid amount')",
+                UUID.randomUUID()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private void insertProjectedCheque(UUID chequeId, String source, UUID eventId) {
+        jdbcTemplate.update("""
+                        INSERT INTO forecast_cheques (cheque_id, company_id, bank_account_id, cheque_number, category,
+                            amount, issue_date, expected_clearing_date, status, source_version, last_event_id,
+                            projection_source)
+                        VALUES (?, ?, ?, '123', 'TAX', 10.00, DATE '2026-10-15', DATE '2026-10-20', 'ISSUED', 1, ?, ?)
+                        """,
+                chequeId, companyId, UUID.randomUUID(), eventId, source);
+    }
+
     private UUID insertConfig(int version, boolean active) {
         return jdbcTemplate.queryForObject("""
                         INSERT INTO forecast_model_configs (company_id, version, is_active, horizon_days, method_code,

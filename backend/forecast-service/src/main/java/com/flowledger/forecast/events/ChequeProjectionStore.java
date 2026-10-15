@@ -5,6 +5,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -55,11 +58,33 @@ public class ChequeProjectionStore {
      * belongs to another company. Either way the existing row is then locked until commit.
      */
     public boolean upsert(ChequeEvent event) {
+        return upsert(event.chequeId(), event.companyId(), event.bankAccountId(), event.chequeNumber(),
+                event.category(), event.amount(), event.issueDate(), event.expectedClearingDate(), event.status(),
+                event.version(),
+                event.sourceEventCreatedAt() == null ? null : event.sourceEventCreatedAt().atOffset(ZoneOffset.UTC),
+                event.messageId(), "EVENT");
+    }
+
+    /**
+     * The same guarded upsert for a cheque read from payment-service's internal scan: it never
+     * replaces the same or a newer version, whichever path wrote it. A backfilled row has no event
+     * ID and no event time.
+     */
+    public boolean upsertSnapshot(ChequeFields cheque) {
+        return upsert(cheque.chequeId(), cheque.companyId(), cheque.bankAccountId(), cheque.chequeNumber(),
+                cheque.category(), cheque.amount(), cheque.issueDate(), cheque.expectedClearingDate(),
+                cheque.status(), cheque.version(), null, null, "BACKFILL");
+    }
+
+    private boolean upsert(UUID chequeId, UUID companyId, UUID bankAccountId, String chequeNumber, String category,
+                           BigDecimal amount, LocalDate issueDate, LocalDate expectedClearingDate, String status,
+                           int version, OffsetDateTime sourceEventCreatedAt, UUID lastEventId, String source) {
         return jdbcTemplate.update("""
                         INSERT INTO forecast_cheques
                             (cheque_id, company_id, bank_account_id, cheque_number, category, amount, issue_date,
-                             expected_clearing_date, status, source_version, source_event_created_at, last_event_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             expected_clearing_date, status, source_version, source_event_created_at, last_event_id,
+                             projection_source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (cheque_id) DO UPDATE SET
                             bank_account_id = EXCLUDED.bank_account_id,
                             cheque_number = EXCLUDED.cheque_number,
@@ -71,14 +96,13 @@ public class ChequeProjectionStore {
                             source_version = EXCLUDED.source_version,
                             source_event_created_at = EXCLUDED.source_event_created_at,
                             last_event_id = EXCLUDED.last_event_id,
+                            projection_source = EXCLUDED.projection_source,
                             projected_at = now()
                         WHERE forecast_cheques.company_id = EXCLUDED.company_id
                           AND forecast_cheques.source_version < EXCLUDED.source_version
                         """,
-                event.chequeId(), event.companyId(), event.bankAccountId(), event.chequeNumber(), event.category(),
-                event.amount(), event.issueDate(), event.expectedClearingDate(), event.status(), event.version(),
-                event.sourceEventCreatedAt() == null ? null : event.sourceEventCreatedAt().atOffset(ZoneOffset.UTC),
-                event.messageId()) == 1;
+                chequeId, companyId, bankAccountId, chequeNumber, category, amount, issueDate, expectedClearingDate,
+                status, version, sourceEventCreatedAt, lastEventId, source) == 1;
     }
 
     public Optional<Current> find(UUID chequeId) {

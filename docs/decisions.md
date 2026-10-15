@@ -908,36 +908,74 @@ confirmed.
   `true`). If RabbitMQ is down, forecast-service still starts and serves
   forecasts; the listener keeps reconnecting.
 
-### Cheque Projection Backfill (design only, not implemented)
+### Cheque Projection Backfill
 
 The consumer only sees events published after payment-service's activation
 boundary; cheques created earlier (and the seven unpublished development
-events) are not in the projection. Forecasts must not switch to the
-projection until it has been backfilled and checked. Proposed approach:
+events) are not in the projection. Confirmed for Feature 2, milestone 2: a
+resumable backfill from payment-service's internal scan (section 9,
+Internal Cheque API). Forecasts still read cheques from the payment API;
+the projection is not verified and not used by calculations.
 
-- Read all cheques through payment-service's internal scan (section 9,
-  Internal Cheque API) and apply each one with the same guarded upsert as
-  the consumer: insert, or update only when the API's `version` is higher
-  than the stored `source_version` and the company matches. The API's
-  `version` is the same cheque column the events carry. The scan has no
-  payee, notes, or audit fields; `source_event_created_at` stays null,
-  and `last_event_id` needs a marker for backfilled rows (it is NOT NULL),
-  for example a fixed, documented "backfill" UUID, or the column made
-  nullable by a later migration.
-- Backfill rows are not written to `processed_events` (there is no event
-  ID), so later events for the same cheque are still applied.
-- Concurrent events: run the backfill while the consumer runs. The version
-  guard makes the order irrelevant: if an event with a newer version was
-  applied first, the older API row is ignored; if the API row is newer than
-  a delayed event, the event is `STALE` when it arrives. Equal versions hold
-  the same data. A cheque changed after its API read arrives later as an
-  event with a higher version.
-- Completeness: compare the projection's count and version sum per company
-  with payment-service's summary, as described there, and rescan on a
-  mismatch. Still open: the forecast side (client, checkpoint, sync state,
-  `last_event_id` for backfilled rows) is not implemented, and a cheque
-  deleted in payment-service (not currently possible) would never be
-  removed.
+- Migration `V3__add_cheque_backfill_state.sql` (additive; V1 and V2 are
+  unchanged): `forecast_cheques.last_event_id` becomes nullable and a new
+  `projection_source` (`EVENT` or `BACKFILL`, existing rows `EVENT`) says
+  which path wrote the current version; a check keeps `EVENT` rows with an
+  event ID and `BACKFILL` rows without one. New tables
+  `cheque_backfill_runs` (status `IN_PROGRESS` or `COMPLETED`, cursor,
+  pages, counts of seen / applied / stale / rejected cheques, failure count,
+  last short error, times; at most one run in progress) and
+  `cheque_backfill_rejections` (run, cheque and company IDs, reason).
+- A run reads pages of `flowledger.cheque-backfill.page-size` (200) with
+  the `PAYMENT_INTERNAL_API_SECRET` key, starting after its saved cursor.
+  Each page is read over HTTP outside any transaction and checked against
+  the scan contract (ascending in the database's UUID order, after the
+  cursor, within the limit, `nextAfterId` equal to the last item); a page
+  that breaks it is a failure and never moves the cursor.
+- One transaction per page locks the run row, checks that the cursor has
+  not moved (otherwise another worker applied the page and it is dropped),
+  applies every item, records rejections, and moves the cursor and the
+  counters. A page is therefore applied completely or not at all, and a
+  restart neither skips nor double-counts it. A run that reaches the end of
+  the scan is `COMPLETED`; this only means the scan ended, not that the
+  projection is complete.
+- Items are validated with the same rules as event payloads (shared
+  `ChequeFields`). Each one goes through the projection's guarded upsert:
+  insert, or update only when the stored `source_version` is lower and the
+  company is the same. Backfilled rows get `projection_source = BACKFILL`,
+  no event ID, and no event time. An invalid item, or a cheque already
+  projected for another company, is recorded in
+  `cheque_backfill_rejections` (IDs and a reason naming the problem, never
+  field values) and the run continues; the rejection count stays on the
+  run for the later verification step.
+- Version handling, both directions: the backfill never replaces the same
+  or a newer version, whichever path wrote it; an event replaces a
+  backfilled row only with a higher version and then sets `EVENT` and its
+  event ID; an event with the same or a lower version is `STALE` and
+  acknowledged. An event applied after a page was read but before it was
+  applied wins, because the page's upsert then finds the higher version
+  (tested). Backfill rows are not written to `processed_events`, so later
+  events for the same cheque are still applied. Equal versions are treated
+  as equal data, which relies on payment-service raising `version` on every
+  change.
+- Failures (payment-service unreachable or answering an error, invalid
+  page, database error in the page transaction) are retried from the same
+  cursor with capped exponential backoff (1 s doubling to 30 s), up to
+  `max-attempts` (5) per page. The run then stops with `last_error` set
+  (an HTTP status, a contract message, or an exception class; never bodies
+  or secrets) and stays `IN_PROGRESS`; the next start resumes it. Starting
+  again after a completed run begins a new run from the start; it changes
+  nothing that is already current.
+- Starting: `CHEQUE_BACKFILL_ON_STARTUP=true` starts or resumes a run in a
+  background thread after startup (default `false`; startup does not wait,
+  and a failure does not stop the service). Without
+  `PAYMENT_INTERNAL_API_SECRET` the backfill refuses to start and creates
+  no run. Several instances can start it at once: they share the one run in
+  progress, and the run-row lock lets only one apply each page.
+- Logs contain run IDs, counts, and short reasons only.
+- Not done yet (milestone 3): comparing the projection with payment-service's
+  summary, a verified state, recording dead-lettered events in the database,
+  and switching forecasts to the projection.
 
 ### Authorization
 
@@ -965,9 +1003,15 @@ projection until it has been backfilled and checked. Proposed approach:
   payment, forecast, cash-management) with test data.
 - Runs are created on request only; there are no scheduled or data-change
   runs and no outbox events.
-- The cheque projection is not used by calculations and is not backfilled,
-  so it only holds cheques changed after payment-service's outbox activation
-  boundary. Dead-lettered messages are only stored; there is no alert,
+- The cheque projection is not used by calculations and is not verified;
+  until a backfill run has completed it only holds cheques changed after
+  payment-service's outbox activation boundary. A completed run is not
+  proof of completeness (scan consistency limits, rejected items, events
+  still pending in payment-service's outbox or in the dead-letter queue).
+  The backfill has no API or UI to start it, show progress, or list
+  rejections; it is started by configuration and read from the database.
+  A rejected item is not retried by the same run, only by a new run.
+  Dead-lettered messages are only stored; there is no alert,
   inspection API, or replay tool. Only one consumer instance was tested
   (more instances are safe through the database guards, but per-cheque order
   is then only protected by the version check). Bank-integration events are
@@ -1093,8 +1137,11 @@ retry; the frontend never falls back to demonstration data.
   (payment-service), and `CHEQUE_EVENTS_CONSUMER_ENABLED` (forecast-service).
 - `PAYMENT_INTERNAL_API_SECRET`: key for payment-service's internal API, at
   least 32 characters and different from `IDENTITY_INTERNAL_API_SECRET`;
-  forecast-service will need the same value for the backfill. Optional for
-  now: without it the internal API refuses every request.
+  forecast-service uses the same value for the cheque backfill. Optional:
+  without it payment-service refuses every internal request and
+  forecast-service's backfill refuses to start; nothing else needs it.
+- `CHEQUE_BACKFILL_ON_STARTUP` (forecast-service, default `false`): start
+  or resume the cheque backfill after startup.
 
 ### Production Requirements
 
@@ -1124,7 +1171,13 @@ The following must be researched or agreed before implementation:
   procedure for dead-lettered or long-pending events, and production broker
   setup (TLS, users and permissions per service, high availability).
 - When forecasts switch from the payment API to the cheque projection, and
-  the forecast side of the backfill (see Cheque Projection Backfill).
+  how the projection is verified against payment-service's summary
+  (milestone 3).
+- How the backfill should be started and monitored in production (startup
+  flag, an internal endpoint, or a scheduled job), and who reviews and
+  resolves rejected items.
+- Whether a backfill run should stop instead of continuing when items are
+  rejected; it currently records and continues.
 - Whether the internal cheque scan needs a stronger consistency model (for
   example a scan watermark or a database snapshot export) instead of the
   summary-and-rescan check, and whether the shared internal key should be
