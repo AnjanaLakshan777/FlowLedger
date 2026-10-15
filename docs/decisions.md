@@ -267,6 +267,17 @@ confirmed before production.
   service) should replace it, and `/internal/**` should not be routed through
   the public API gateway.
 
+### Current User
+
+- `GET /api/v1/identity/me` returns the signed-in user's ID, email, full name,
+  platform role, and the memberships they can act through (active membership
+  in an active company: membership ID, company ID and name, company role).
+  It reads only the caller's own data; an account that is no longer `ACTIVE`
+  gets 403. It exists so a client can choose the company and show the pages
+  of the role; every service still checks access on each request.
+- A `SYSTEM_ADMIN` without memberships sees no companies here. There is no
+  API yet that lists all companies for platform administration.
+
 ### Platform and Company Administration
 
 - `users.platform_role` is restricted to `USER` and `SYSTEM_ADMIN` by

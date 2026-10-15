@@ -38,6 +38,17 @@ public interface CompanyMembershipRepository extends JpaRepository<CompanyMember
             """)
     List<CompanyMembership> findAllInCompany(UUID companyId);
 
+    // Only memberships the user can act through: active membership in an active company.
+    @Query("""
+            select m from CompanyMembership m
+            join fetch m.company c
+            where m.user.id = :userId
+              and m.status = com.flowledger.identity.entity.MembershipStatus.ACTIVE
+              and c.status = com.flowledger.identity.entity.CompanyStatus.ACTIVE
+            order by c.name, c.id
+            """)
+    List<CompanyMembership> findActiveForUser(UUID userId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select m from CompanyMembership m
