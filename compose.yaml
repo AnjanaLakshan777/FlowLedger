@@ -65,7 +65,30 @@ services:
       timeout: 5s
       retries: 5
 
+  payment-db:
+    image: postgres:17
+    container_name: flowledger-payment-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: flowledger_payment
+      POSTGRES_USER: flowledger_app
+      POSTGRES_PASSWORD: ${PAYMENT_DB_PASSWORD:?Set PAYMENT_DB_PASSWORD in your environment}
+
+    ports:
+      - "5436:5432"
+
+    volumes:
+      - payment_db_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowledger_app -d flowledger_payment"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   identity_db_data:
   bank_integration_db_data:
   cash_management_db_data:
+  payment_db_data:

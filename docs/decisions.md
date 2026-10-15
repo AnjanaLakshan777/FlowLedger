@@ -46,6 +46,9 @@ balance, and transaction tables can reference them within the same database.
 `cash-management-service` has been created with daily sales management only
 (see section 8).
 
+`payment-service` has been created with cheque payment management only
+(see section 9).
+
 ## 4. Confirmed Business Rules
 
 ### Bank Account and Forecast
@@ -127,6 +130,21 @@ Confirmed by the product owner on 2026-10-15.
 - Do not automatically mark overdue cheques as paid.
 - Actual outflows include cheque payments actually debited by their actual
   bank transaction date.
+
+Confirmed by the product owner on 2026-10-15:
+
+- Only `FINANCE_CONTROLLER` and `COMPANY_ADMIN` may add, edit, or cancel
+  cheque payments, within their own company. `ACCOUNTANT` may view them;
+  `CASHIER` has no access. A `SYSTEM_ADMIN` has cheque access only through a
+  company membership with one of these roles, since cheques are financial
+  business data (section 4, Roles and Administration).
+- Every cheque has a payment category: Supplier Payment, Salary, Tax, or
+  Other Expenses, as in the finalized UI. This adds a `category` column that
+  schema document v1 does not have.
+- Cheques are drawn on the company's active current account. The server finds
+  it in `bank-integration-service`; clients do not send a bank account.
+- Cancelling a cheque requires a reason, recorded with the actor in the
+  payment audit history.
 
 ### Historical Sales Import
 
@@ -536,7 +554,65 @@ before production.
 - The JWT validation, identity client, and authorization code is duplicated in
   `bank-integration-service` and `cash-management-service`.
 
-## 9. Unresolved Decisions
+## 9. Provisional Payment Rules
+
+These rules are implemented in `payment-service`. Rules not stated in section 4
+follow the finalized UI and must be reviewed before production.
+
+### Cheques
+
+- Migration `V1__create_cheque_tables.sql` creates `cheques`,
+  `payment_audit_events`, and `outbox_events` (schema document section 5, plus
+  `category`). `company_id`, `bank_account_id`, and user IDs are stored without
+  cross-service foreign keys.
+- API under `/api/v1/payment/companies/{companyId}/cheques`: `POST` (add),
+  `GET` (list, optional `status`, `clearingFrom`, `clearingTo`), `GET /{id}`,
+  `PUT /{id}` (edit), and `POST /{id}/cancel` (`reason`, `version`).
+- Validation follows the UI: a 6-digit cheque number (kept as text, so leading
+  zeros are preserved), amount greater than 0 with at most two decimal places,
+  expected clearing date not before the issue date and after today in
+  `Asia/Colombo`. A cheque number can be used once per company current
+  account (409), including after cancellation.
+- Only an `ISSUED` cheque whose expected clearing date is after today can be
+  edited or cancelled (409 otherwise), matching the UI. A cheque past its
+  expected clearing date stays `ISSUED`; nothing marks it paid.
+- Edits and cancellations carry the cheque's `version`. A stale version, or a
+  concurrent change, returns 409 instead of overwriting another user's change.
+- If the company has no active current account, adding a cheque returns 409.
+  If `bank-integration-service` cannot answer, it returns 503.
+
+### Audit History and Outbox
+
+- Every add, effective edit, and cancellation writes a `payment_audit_events`
+  row (`CHEQUE_ISSUED`, `CHEQUE_UPDATED`, `CHEQUE_CANCELLED`) with the actor,
+  before and after state, and the cancellation reason, in the same transaction
+  as the change. An edit that changes nothing writes no event.
+- `payment_audit_events` is append-only: database triggers reject `UPDATE`,
+  `DELETE`, and `TRUNCATE`, and the application has no update or delete code.
+  The database user is a superuser and could bypass the triggers; production
+  needs a separate runtime role without that power.
+- The same transaction writes a `ChequeIssued`, `ChequeUpdated`, or
+  `ChequeCancelled` row to `outbox_events`, with cheque IDs, amount, dates,
+  status, and version but no payee or notes. Publishing the outbox (to the
+  forecast) is not implemented yet.
+
+### Authorization and Dependencies
+
+- Calls to identity-service and bank-integration-service finish before any
+  database transaction starts. Both fail closed (503).
+- Local setup: port 8083; database `flowledger_payment` in the `payment-db`
+  container on port 5436; password from `PAYMENT_DB_PASSWORD`;
+  `BANK_INTEGRATION_SERVICE_URL` (default `http://localhost:8082`).
+
+### Known Limitations
+
+- No outbox publisher yet, so the forecast does not receive cheque events.
+- No audit-history read API.
+- Listing is not paginated.
+- The JWT validation, identity client, and authorization code is also
+  duplicated here.
+
+## 10. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -560,7 +636,7 @@ The following must be researched or agreed before implementation:
 - How other services will validate access tokens (asymmetric signing keys,
   gateway validation, or another approach).
 - The permission matrix for features not built yet (historical import
-  approval, cheques, forecast, company settings) across services.
+  approval, forecast, company settings) across services.
 - Production-grade service-to-service authentication (for example mTLS) to
   replace the shared `IDENTITY_INTERNAL_API_SECRET`, and whether membership
   answers may be cached and for how long.
@@ -579,8 +655,28 @@ The following must be researched or agreed before implementation:
   an administrator), and how platform-level settings are managed.
 - Self-service tenant onboarding, if any, instead of companies being created
   by a `SYSTEM_ADMIN`.
+- The UI shows cheque states `Scheduled`, `Assumed paid`, `Cancelled`, and
+  `Bounced`. The confirmed lifecycle has only `ISSUED` and `CANCELLED`:
+  `Bounced` is not implemented, and "Assumed paid" is a display label for an
+  `ISSUED` cheque past its clearing date. How overdue cheques are treated in
+  the forecast, and whether bounced cheques are recorded, is still open.
+- How cheques that need correction after their expected clearing date are
+  handled; the UI and the API allow no change once that date has passed.
+- Audit events for company creation and membership changes in
+  identity-service (deferred; plan proposed, questions still open).
+- Statement formats of other banks, including whether any bank uses `d/M`
+  dates (the parser assumes `M/d/yyyy`, which is ambiguous for days 1-12).
+- Whether a repeated statement file should be refused or need confirmation
+  instead of being imported with all rows counted as duplicates.
+- The time of day a statement closing balance applies to (currently end of
+  the last transaction date in `Asia/Colombo`), and how statement balances
+  rank against `BANK_API` or manual balances.
+- Duplicate detection for statements without a running balance, and how
+  bank corrections or reversals of imported rows are handled.
+- Whether `ACCOUNTANT` may classify transactions, and whether automatic
+  classification rules (`RULE`, `BANK_METADATA`) will be introduced.
 
-## 10. Decision Log Maintenance
+## 11. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.
