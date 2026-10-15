@@ -3,6 +3,7 @@ package com.flowledger.forecast.controller;
 import com.flowledger.forecast.support.FakeIdentityServer;
 import com.flowledger.forecast.support.FakeSourceServices;
 import com.flowledger.forecast.support.FixedClockConfig;
+import com.flowledger.forecast.support.ProjectedCheques;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,10 +59,12 @@ class ForecastAuthorizationIntegrationTest {
     private JdbcTemplate jdbcTemplate;
 
     private UUID companyId;
+    private ProjectedCheques projected;
 
     @BeforeEach
     void setUp() {
         companyId = UUID.randomUUID();
+        projected = new ProjectedCheques(jdbcTemplate);
         UUID accountId = UUID.randomUUID();
         identityService.reset();
         sources.reset();
@@ -69,7 +72,7 @@ class ForecastAuthorizationIntegrationTest {
         sources.balance(companyId, accountId, "1000.00", "2026-10-14T18:29:59Z");
         sources.statements(companyId, accountId, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 10, 14));
         sources.transactions(companyId, List.of());
-        sources.cheques(companyId, List.of());
+        projected.cheques(companyId, List.of());
     }
 
     @ParameterizedTest

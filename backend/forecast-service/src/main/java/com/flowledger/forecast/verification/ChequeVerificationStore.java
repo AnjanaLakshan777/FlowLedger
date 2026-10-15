@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -131,6 +132,26 @@ public class ChequeVerificationStore {
                 payment == null ? null : payment.chequeCount(), payment == null ? null : payment.issuedCount(),
                 payment == null ? null : payment.cancelledCount(), payment == null ? null : payment.versionSum(),
                 result.deadLetterCount(), result.projectionReadAt(), result.status());
+    }
+
+    /**
+     * @param verifiedWithinMaxAge whether the stored status is VERIFIED and was verified at most
+     *                             maxAge ago, both by the database clock
+     */
+    public record Latest(String status, String reason, boolean verifiedWithinMaxAge) {
+    }
+
+    public Optional<Latest> latest(UUID companyId, Duration maxAge) {
+        return jdbcTemplate.query("""
+                        SELECT status, reason,
+                               status = 'VERIFIED' AND verified_at >= now() - make_interval(secs => ?)
+                                   AS verified_within_max_age
+                        FROM cheque_projection_verifications
+                        WHERE company_id = ?
+                        """,
+                (rs, rowNum) -> new Latest(rs.getString("status"), rs.getString("reason"),
+                        rs.getBoolean("verified_within_max_age")),
+                maxAge.toMillis() / 1000.0, companyId).stream().findFirst();
     }
 
     public Optional<Map<String, Object>> find(UUID companyId) {

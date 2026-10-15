@@ -20,9 +20,10 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
- * Stands in for the APIs of bank-integration-service and payment-service over real HTTP. Replies
- * are configured per request path; any other path is answered with 404. Both services' paths
- * start differently, so one server serves both. Their own rules are tested in their services.
+ * Stands in for the API of bank-integration-service over real HTTP. Replies are configured per
+ * request path; any other path is answered with 404, so a request to payment-service's public API
+ * would be visible here. Cheques come from the projection (see ProjectedCheques). The service's
+ * own rules are tested there.
  */
 public final class FakeSourceServices {
 
@@ -107,10 +108,6 @@ public final class FakeSourceServices {
         return "/api/v1/bank-integration/companies/" + companyId + "/bank-transactions";
     }
 
-    public static String chequesPath(UUID companyId) {
-        return "/api/v1/payment/companies/" + companyId + "/cheques";
-    }
-
     public void currentAccount(UUID companyId, UUID accountId) {
         reply(accountsPath(companyId), 200, """
                 [{"id": "%s", "companyId": "%s", "accountType": "CURRENT", "status": "ACTIVE", "currency": "LKR"}]
@@ -142,24 +139,12 @@ public final class FakeSourceServices {
         reply(transactionsPath(companyId), 200, "[" + String.join(",", transactions) + "]");
     }
 
-    public void cheques(UUID companyId, List<String> cheques) {
-        reply(chequesPath(companyId), 200, "[" + String.join(",", cheques) + "]");
-    }
-
     public static String transaction(UUID accountId, LocalDate date, String direction, String amount,
                                      String category) {
         return """
                 {"id": "%s", "bankAccountId": "%s", "transactionDate": "%s", "direction": "%s", "amount": %s,
                  "currency": "LKR", "runningBalance": null, "category": "%s", "description": "not used"}
                 """.formatted(UUID.randomUUID(), accountId, date, direction, amount, category);
-    }
-
-    public static String cheque(UUID chequeId, UUID accountId, String number, String amount, LocalDate clearing,
-                                String status) {
-        return """
-                {"id": "%s", "bankAccountId": "%s", "chequeNumber": "%s", "payeeName": "Lanka Tiles",
-                 "amount": %s, "expectedClearingDate": "%s", "status": "%s", "version": 1}
-                """.formatted(chequeId, accountId, number, amount, clearing, status);
     }
 
     private void handle(HttpExchange exchange) throws IOException {

@@ -11,7 +11,6 @@ import com.flowledger.forecast.calculation.StatementCoverage;
 import com.flowledger.forecast.client.BankIntegrationClient;
 import com.flowledger.forecast.client.BankIntegrationClient.Balance;
 import com.flowledger.forecast.client.BankIntegrationClient.Transaction;
-import com.flowledger.forecast.client.PaymentClient;
 import com.flowledger.forecast.dto.ForecastRunResponse;
 import com.flowledger.forecast.dto.ForecastRunSummaryResponse;
 import com.flowledger.forecast.entity.DataQuality;
@@ -26,6 +25,7 @@ import com.flowledger.forecast.repository.ForecastRunRepository;
 import com.flowledger.forecast.repository.ForecastRunStore;
 import com.flowledger.forecast.security.CompanyAccessVerifier;
 import com.flowledger.forecast.security.CompanyRole;
+import com.flowledger.forecast.verification.VerifiedChequeProjection;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -58,9 +58,10 @@ import java.util.stream.Collectors;
 /**
  * Creates and reads rolling 84-day forecasts. A run starts from the latest confirmed bank balance
  * of the company's current account, adds sales inflows estimated from classified bank history,
- * and deducts ISSUED cheques on their expected clearing dates. All inputs come from the owning
- * services' APIs and are fetched before the database transaction; a run is saved complete and
- * never changed.
+ * and deducts ISSUED cheques on their expected clearing dates. Bank inputs come from
+ * bank-integration-service's API; cheques come from forecast's own projection of payment-service's
+ * cheques, and only while that projection is verified complete (otherwise the forecast is refused).
+ * All inputs are read before the database transaction; a run is saved complete and never changed.
  */
 @Slf4j
 @Service
@@ -86,7 +87,7 @@ public class ForecastService {
     private final ForecastRunChequeRepository runChequeRepository;
     private final ForecastRunStore runStore;
     private final BankIntegrationClient bankIntegrationClient;
-    private final PaymentClient paymentClient;
+    private final VerifiedChequeProjection chequeProjection;
     private final CompanyAccessVerifier companyAccessVerifier;
     private final Map<String, InflowForecastStrategy> strategies;
     private final Clock clock;
@@ -102,7 +103,7 @@ public class ForecastService {
                            ForecastRunChequeRepository runChequeRepository,
                            ForecastRunStore runStore,
                            BankIntegrationClient bankIntegrationClient,
-                           PaymentClient paymentClient,
+                           VerifiedChequeProjection chequeProjection,
                            CompanyAccessVerifier companyAccessVerifier,
                            List<InflowForecastStrategy> strategies,
                            Clock clock,
@@ -113,7 +114,7 @@ public class ForecastService {
         this.runChequeRepository = runChequeRepository;
         this.runStore = runStore;
         this.bankIntegrationClient = bankIntegrationClient;
-        this.paymentClient = paymentClient;
+        this.chequeProjection = chequeProjection;
         this.companyAccessVerifier = companyAccessVerifier;
         this.strategies = strategies.stream()
                 .collect(Collectors.toMap(InflowForecastStrategy::code, Function.identity()));
@@ -148,11 +149,8 @@ public class ForecastService {
         List<StatementCoverage.Period> periods = importedPeriods(user, companyId, accountId);
         List<Transaction> history = bankIntegrationClient.listTransactions(
                 user, companyId, accountId, historyFrom, balanceDate);
-        List<ExpectedCheque> cheques = paymentClient
-                .listIssuedCheques(user, companyId, horizon.getFirst(), horizon.getLast()).stream()
-                .filter(cheque -> cheque.bankAccountId().equals(accountId))
-                .map(cheque -> new ExpectedCheque(cheque.id(), cheque.chequeNumber(), cheque.amount(),
-                        cheque.expectedClearingDate(), cheque.version()))
+        List<ExpectedCheque> cheques = chequeProjection
+                .issuedCheques(companyId, accountId, horizon.getFirst(), horizon.getLast()).stream()
                 .sorted(Comparator.comparing(ExpectedCheque::expectedClearingDate)
                         .thenComparing(ExpectedCheque::chequeNumber))
                 .toList();

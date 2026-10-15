@@ -3,6 +3,7 @@ package com.flowledger.forecast.controller;
 import com.flowledger.forecast.support.FakeIdentityServer;
 import com.flowledger.forecast.support.FakeSourceServices;
 import com.flowledger.forecast.support.FixedClockConfig;
+import com.flowledger.forecast.support.ProjectedCheques;
 import com.jayway.jsonpath.JsonPath;
 import com.zaxxer.hikari.HikariDataSource;
 import com.zaxxer.hikari.HikariPoolMXBean;
@@ -34,7 +35,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static com.flowledger.forecast.support.FakeSourceServices.cheque;
+import static com.flowledger.forecast.support.ProjectedCheques.cheque;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -72,10 +73,12 @@ class ForecastConcurrencyIntegrationTest {
     private PlatformTransactionManager transactionManager;
 
     private UUID companyId;
+    private ProjectedCheques projected;
 
     @BeforeEach
     void setUp() {
         companyId = UUID.randomUUID();
+        projected = new ProjectedCheques(jdbcTemplate);
         UUID accountId = UUID.randomUUID();
         identityService.reset();
         sources.reset();
@@ -83,7 +86,7 @@ class ForecastConcurrencyIntegrationTest {
         sources.balance(companyId, accountId, "250000.00", "2026-10-14T18:29:59Z");
         sources.statements(companyId, accountId, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 10, 14));
         sources.transactions(companyId, List.of());
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000123", "1000.00", LocalDate.of(2026, 10, 20), "ISSUED")));
     }
 
@@ -104,6 +107,7 @@ class ForecastConcurrencyIntegrationTest {
             jdbcTemplate.update("DELETE FROM forecast_runs WHERE company_id = ?", companyId);
             jdbcTemplate.update("DELETE FROM forecast_model_configs WHERE company_id = ?", companyId);
         });
+        projected.deleteAll();
     }
 
     @Test
@@ -145,8 +149,9 @@ class ForecastConcurrencyIntegrationTest {
 
         assertThat(create().getStatus()).isEqualTo(201);
 
-        // Identity check, then account, balance, statements, transactions and cheques.
-        assertThat(activeConnections).containsExactly(0, 0, 0, 0, 0, 0);
+        // Identity check, then account, balance, statements and transactions; cheques come from the
+        // projection, not from another service.
+        assertThat(activeConnections).containsExactly(0, 0, 0, 0, 0);
     }
 
     private MockHttpServletResponse create() throws Exception {

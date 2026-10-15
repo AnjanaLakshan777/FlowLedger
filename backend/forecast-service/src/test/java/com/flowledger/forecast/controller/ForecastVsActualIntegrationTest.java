@@ -3,6 +3,7 @@ package com.flowledger.forecast.controller;
 import com.flowledger.forecast.support.FakeIdentityServer;
 import com.flowledger.forecast.support.FakeSourceServices;
 import com.flowledger.forecast.support.FixedClockConfig;
+import com.flowledger.forecast.support.ProjectedCheques;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -24,8 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.flowledger.forecast.support.FakeSourceServices.cheque;
 import static com.flowledger.forecast.support.FakeSourceServices.transaction;
+import static com.flowledger.forecast.support.ProjectedCheques.cheque;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
@@ -62,12 +64,17 @@ class ForecastVsActualIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private UUID companyId;
     private UUID accountId;
+    private ProjectedCheques projected;
 
     @BeforeEach
     void setUp() {
         companyId = UUID.randomUUID();
+        projected = new ProjectedCheques(jdbcTemplate);
         accountId = UUID.randomUUID();
         identityService.reset();
         sources.reset();
@@ -77,7 +84,7 @@ class ForecastVsActualIntegrationTest {
         sources.balance(companyId, accountId, "500000.00", "2026-09-30T18:29:59Z");
         sources.statements(companyId, accountId, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 10, 14));
         sources.transactions(companyId, weeklySales(LocalDate.of(2026, 8, 6), LocalDate.of(2026, 9, 30)));
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000123", "200000.00", LocalDate.of(2026, 10, 7), "ISSUED"),
                 cheque(UUID.randomUUID(), accountId, "000124", "30000.00", LocalDate.of(2026, 10, 20), "ISSUED")));
     }

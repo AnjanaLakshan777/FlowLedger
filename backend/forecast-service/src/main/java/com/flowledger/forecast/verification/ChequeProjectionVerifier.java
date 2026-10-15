@@ -104,7 +104,7 @@ public class ChequeProjectionVerifier {
      * that come out RETRY_REQUIRED are checked again, up to the configured attempts.
      */
     public List<CompanyResult> verifyAll() {
-        return verify(null);
+        return verify(null, properties.maxAttempts());
     }
 
     /**
@@ -115,10 +115,21 @@ public class ChequeProjectionVerifier {
         if (companyId == null) {
             throw new IllegalArgumentException("companyId is required");
         }
-        return verify(companyId).getFirst();
+        return verify(companyId, properties.maxAttempts()).getFirst();
     }
 
-    private List<CompanyResult> verify(UUID onlyCompany) {
+    /**
+     * Checks one company once, without waiting to retry, for a request that needs the answer now.
+     * The result is stored like any other.
+     */
+    public CompanyResult verifyCompanyNow(UUID companyId) {
+        if (companyId == null) {
+            throw new IllegalArgumentException("companyId is required");
+        }
+        return verify(companyId, 1).getFirst();
+    }
+
+    private List<CompanyResult> verify(UUID onlyCompany, int maxAttempts) {
         List<CompanyResult> finished = new ArrayList<>();
         Set<UUID> pending = null;
         for (int attempt = 1; ; attempt++) {
@@ -143,7 +154,7 @@ public class ChequeProjectionVerifier {
                         result.reason().name(), evidence.backfill().completedRunId(), result.projected(),
                         result.payment(), evidence.deadLetters().isPresent()
                         ? evidence.deadLetters().getAsLong() : null, evidence.projection().readAt()));
-                if (result.status() == Status.RETRY_REQUIRED && attempt < properties.maxAttempts()) {
+                if (result.status() == Status.RETRY_REQUIRED && attempt < maxAttempts) {
                     retry.add(companyId);
                 } else {
                     finished.add(result);

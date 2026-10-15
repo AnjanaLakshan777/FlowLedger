@@ -3,6 +3,7 @@ package com.flowledger.forecast.controller;
 import com.flowledger.forecast.support.FakeIdentityServer;
 import com.flowledger.forecast.support.FakeSourceServices;
 import com.flowledger.forecast.support.FixedClockConfig;
+import com.flowledger.forecast.support.ProjectedCheques;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,15 +22,14 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.flowledger.forecast.support.FakeSourceServices.cheque;
 import static com.flowledger.forecast.support.FakeSourceServices.transaction;
+import static com.flowledger.forecast.support.ProjectedCheques.cheque;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
@@ -45,9 +45,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Forecast runs from the inputs of bank-integration-service and payment-service, which are
- * served by FakeSourceServices over HTTP. "Today" is 15 October 2026. Needs the local forecast
- * PostgreSQL database. Each test is rolled back.
+ * Forecast runs from bank-integration-service's inputs, served by FakeSourceServices over HTTP, and
+ * the verified cheque projection (ProjectedCheques). "Today" is 15 October 2026. Needs the local
+ * forecast PostgreSQL database. Each test is rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -77,9 +77,11 @@ class ForecastRunIntegrationTest {
     private UUID userId;
     private UUID companyId;
     private UUID accountId;
+    private ProjectedCheques projected;
 
     @BeforeEach
     void setUp() {
+        projected = new ProjectedCheques(jdbcTemplate);
         userId = UUID.randomUUID();
         companyId = UUID.randomUUID();
         accountId = UUID.randomUUID();
@@ -90,7 +92,7 @@ class ForecastRunIntegrationTest {
         sources.balance(companyId, accountId, "500000.00", BALANCE_AS_OF);
         sources.statements(companyId, accountId, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 10, 14));
         sources.transactions(companyId, salesHistory());
-        sources.cheques(companyId, List.of());
+        projected.cheques(companyId, List.of());
     }
 
     @Test
@@ -99,7 +101,7 @@ class ForecastRunIntegrationTest {
         UUID beforeHorizon = UUID.randomUUID();
         UUID afterHorizon = UUID.randomUUID();
         UUID otherAccount = UUID.randomUUID();
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000123", "250000.00", LocalDate.of(2026, 10, 20), "ISSUED"),
                 cheque(UUID.randomUUID(), accountId, "000124", "100000.00", LocalDate.of(2026, 10, 20), "ISSUED"),
                 cheque(UUID.randomUUID(), accountId, "000200", "75000.00", LocalDate.of(2027, 1, 6), "ISSUED"),
@@ -177,12 +179,9 @@ class ForecastRunIntegrationTest {
                 .orElseThrow());
         assertThat(transactionQuery).containsEntry("bankAccountId", accountId.toString())
                 .containsEntry("from", "2026-08-20").containsEntry("to", "2026-10-14");
-        Map<String, String> chequeQuery = FakeSourceServices.params(requests.stream()
-                .filter(request -> request.startsWith(FakeSourceServices.chequesPath(companyId))).findFirst()
-                .orElseThrow());
-        assertThat(chequeQuery).containsEntry("status", "ISSUED")
-                .containsEntry("clearingFrom", "2026-10-15").containsEntry("clearingTo", "2027-01-06");
         assertThat(sources.lastAuthorization()).isEqualTo("Bearer " + USER_TOKEN);
+        // Cheques come from the verified projection: payment-service's public API is not called.
+        assertThat(requests).noneMatch(request -> request.startsWith("/api/v1/payment"));
     }
 
     // OTHER and UNCLASSIFIED credits are never sales, even when they are the only credits.
@@ -217,7 +216,7 @@ class ForecastRunIntegrationTest {
     @Test
     void shouldFlagTheFirstDayAChequeTakesTheBalanceBelowZero() throws Exception {
         sources.balance(companyId, accountId, "100000.00", BALANCE_AS_OF);
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000555", "800000.00", LocalDate.of(2026, 10, 16), "ISSUED")));
 
         // 15 Oct: 100000; 16 Oct: -700000; Monday 19 Oct: +100000; Tuesday 20 Oct: +50000.
@@ -278,7 +277,7 @@ class ForecastRunIntegrationTest {
     @Test
     void shouldLeaveInflowsOutWhenHistoryIsInsufficient() throws Exception {
         sources.statements(companyId, accountId, LocalDate.of(2026, 9, 24), LocalDate.of(2026, 10, 14));
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000123", "250000.00", LocalDate.of(2026, 10, 20), "ISSUED")));
 
         create().andExpect(status().isCreated())
@@ -302,23 +301,23 @@ class ForecastRunIntegrationTest {
         assertThat(count("SELECT count(*) FROM forecast_runs WHERE company_id = ?", companyId)).isEqualTo(1);
 
         // Any change to the inputs, here a new cheque, makes a new run.
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(UUID.randomUUID(), accountId, "000900", "1000.00", LocalDate.of(2026, 11, 2), "ISSUED")));
         create().andExpect(status().isCreated());
         assertThat(count("SELECT count(*) FROM forecast_runs WHERE company_id = ?", companyId)).isEqualTo(2);
         assertThat(count("SELECT count(*) FROM forecast_model_configs WHERE company_id = ?", companyId)).isEqualTo(1);
     }
 
-    // A saved run keeps the cheques it used, even after they change in payment-service.
+    // A saved run keeps the cheques it used, even after they change in the projection.
     @Test
     void shouldKeepASavedRunUnchangedWhenSourcesChange() throws Exception {
         UUID chequeId = UUID.randomUUID();
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(chequeId, accountId, "000123", "250000.00", LocalDate.of(2026, 10, 20), "ISSUED")));
         String runId = JsonPath.read(create().andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString(), "$.run.id");
 
-        sources.cheques(companyId, List.of(
+        projected.cheques(companyId, List.of(
                 cheque(chequeId, accountId, "000123", "250000.00", LocalDate.of(2026, 10, 20), "CANCELLED")));
         sources.balance(companyId, accountId, "1.00", BALANCE_AS_OF);
 
@@ -354,13 +353,12 @@ class ForecastRunIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"accounts", "imports", "transactions", "cheques"})
+    @ValueSource(strings = {"accounts", "imports", "transactions"})
     void shouldFailClosedWhenASourceServiceFails(String failing) throws Exception {
         String path = switch (failing) {
             case "accounts" -> FakeSourceServices.accountsPath(companyId);
             case "imports" -> FakeSourceServices.importsPath(companyId);
-            case "transactions" -> FakeSourceServices.transactionsPath(companyId);
-            default -> FakeSourceServices.chequesPath(companyId);
+            default -> FakeSourceServices.transactionsPath(companyId);
         };
         sources.reply(path, 500, "{}");
 
@@ -378,17 +376,6 @@ class ForecastRunIntegrationTest {
 
         create().andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.detail").value("Bank data could not be loaded. Please try again later."));
-    }
-
-    @Test
-    void shouldFailClosedWhenPaymentServiceTimesOut() throws Exception {
-        // Answers after the 1s read timeout configured for tests.
-        sources.replyAfterDelay(FakeSourceServices.chequesPath(companyId), "[]", Duration.ofSeconds(3));
-
-        create().andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.detail").value("Cheque data could not be loaded. Please try again later."));
-
-        assertThat(count("SELECT count(*) FROM forecast_runs WHERE company_id = ?", companyId)).isZero();
     }
 
     // A Monday cash deposit and a Tuesday card settlement every week of the history, plus

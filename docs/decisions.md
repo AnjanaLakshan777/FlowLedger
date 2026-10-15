@@ -779,18 +779,20 @@ confirmed.
 - API under `/api/v1/forecast/companies/{companyId}/forecast-runs`: `POST`
   (create a run), `GET` (list), `GET /{runId}` (run with its 84 days and the
   cheques used), and `GET /{runId}/forecast-vs-actual`.
-- Inputs are read with the user's token from the owning services, never
-  from their databases: the active current account, its latest balance
-  snapshot, the statement import batches, and the bank transactions from
-  bank-integration-service; `ISSUED` cheques from payment-service. All calls
-  finish before the run's database transaction; open-in-view is off, so no
-  connection is held while they run. Daily sales from cash-management are
-  not used, so they cannot be counted twice.
-- Fail closed: if identity-service, bank-integration-service, or
-  payment-service cannot answer, answers with an error, times out, or returns
-  incomplete data, the request returns 503 and nothing is saved. No active
-  current account, or no confirmed LKR balance, returns 409; a missing
-  balance is never replaced by zero.
+- Bank inputs are read with the user's token from bank-integration-service,
+  never from its database: the active current account, its latest balance
+  snapshot, the statement import batches, and the bank transactions.
+  `ISSUED` cheques come from forecast's own verified cheque projection
+  (Feature 2, milestone 4; see Forecast Cheque Source below), no longer from
+  payment-service's public cheque list. All remote calls finish before the
+  run's database transaction; open-in-view is off, so no connection is held
+  while they run. Daily sales from cash-management are not used, so they
+  cannot be counted twice.
+- Fail closed: if identity-service or bank-integration-service cannot
+  answer, answers with an error, times out, or returns incomplete data, or
+  the company's cheque projection is not verified, the request returns 503
+  and nothing is saved. No active current account, or no confirmed LKR
+  balance, returns 409; a missing balance is never replaced by zero.
 - A run is saved complete and never changed (triggers reject `UPDATE`,
   `DELETE`, `TRUNCATE`). It stores the cheques it deducted, a copy of the
   configuration, and a SHA-256 digest of all inputs. Requesting a forecast
@@ -1054,8 +1056,46 @@ stored but not used by forecast calculations yet.
   (`CHEQUE_BACKFILL_ON_STARTUP=true`) completes; no API, schedule, or UI
   yet. Logs contain counts and reason codes only.
 - VERIFIED is a statement about the time of the check. Later changes are
-  not tracked against it; a forecast that relies on it must check again
-  (or bound its age), which is milestone 4's decision.
+  not tracked against it; forecasts bound its age (next section).
+
+### Forecast Cheque Source
+
+Confirmed for Feature 2, milestone 4.
+
+- A forecast reads its cheques from `forecast_cheques`: `ISSUED` cheques of
+  the company and its current account with an expected clearing date in the
+  84-day horizon, the same selection and order as before. The calculation,
+  the input digest (cheque ID, version, clearing date, amount), saved runs
+  and their cheque snapshots, and Forecast vs Actual are unchanged. For the
+  same cheques, a run from the projection is identical to one from the
+  payment API. payment-service's public cheque list is no longer called,
+  and the old client was removed.
+- The projection is used only while the company's verification is
+  `VERIFIED`. A stored result counts if it is at most
+  `flowledger.cheque-verification.max-age` old by the database clock
+  (`CHEQUE_VERIFICATION_MAX_AGE`). If it is older, missing, or anything but
+  VERIFIED, the forecast checks the company once on the spot (section on
+  verification; one attempt, no waiting) and stores the result. Only a
+  VERIFIED answer lets the forecast continue; otherwise it returns 503,
+  "Cheque data could not be confirmed as complete. Please try again later.",
+  with the reason code in `chequeVerification`, and nothing is saved. Old
+  results are never treated as current.
+- Proposed default (no product decision exists): maximum age `0s`, so every
+  forecast checks the company when it is created. The projection, read
+  right after a check that matched payment-service, then misses only changes
+  made after that check, the same exposure the forecast had when it read
+  payment-service's cheque list. A larger value (for example `5m`) saves the
+  check but a forecast may then miss cheque changes made since the last
+  check whose events have not arrived; it is configurable but not
+  recommended for production without a product decision.
+- Consequences of the conservative default: every forecast needs
+  payment-service's internal summary (`PAYMENT_INTERNAL_API_SECRET` set in
+  forecast-service), RabbitMQ (dead-letter queue count), and a completed
+  backfill run. Before the first backfill, while the dead-letter queue holds
+  messages, while payment-service or RabbitMQ is down, or while events are
+  still arriving, forecasts are refused with 503. Saved runs stay readable.
+- A run does not record which verification it relied on; its cheque
+  snapshot and input digest record what it used.
 
 ### Authorization
 
@@ -1074,10 +1114,12 @@ stored but not used by forecast calculations yet.
 
 ### Known Limitations
 
-- A forecast needs four synchronous service calls plus the identity check;
-  it is unavailable while any of these services is down.
-- Bank transactions, imports, and cheques are read without pagination; long
-  histories make larger responses.
+- A forecast needs four synchronous calls to bank-integration-service, the
+  identity check, and (with the default maximum age) a cheque verification
+  that calls payment-service's internal summary and RabbitMQ; it is
+  unavailable while any of these is down.
+- Bank transactions and imports are read without pagination; long histories
+  make larger responses.
 - Automated tests use fakes for the other services; the full flow was also
   run once by hand against the running services (identity, bank-integration,
   payment, forecast, cash-management) with test data.
@@ -1223,6 +1265,10 @@ retry; the frontend never falls back to demonstration data.
 - `CHEQUE_BACKFILL_ON_STARTUP` (forecast-service, default `false`): start
   or resume the cheque backfill after startup, and verify the projection
   once the run completes.
+- `CHEQUE_VERIFICATION_MAX_AGE` (forecast-service, default `0s`): how old a
+  stored VERIFIED result may be for a forecast to use it without checking
+  again. Forecasts now need `PAYMENT_INTERNAL_API_SECRET` in
+  forecast-service and a completed cheque backfill.
 
 ### Production Requirements
 
@@ -1251,9 +1297,9 @@ The following must be researched or agreed before implementation:
 - Outbox publishing for bank-integration-service, alerting and a replay
   procedure for dead-lettered or long-pending events, and production broker
   setup (TLS, users and permissions per service, high availability).
-- When forecasts switch from the payment API to the cheque projection, and
-  how old a VERIFIED result may be when a forecast relies on it (milestone
-  4).
+- The maximum verification age for production (default `0s`, checked on
+  every forecast), and whether a forecast should instead fall back or wait
+  when the projection is not verified (it is refused).
 - Missing contracts for stronger verification: a per-company checksum of
   cheque ID, company, and version in payment-service's summary (record
   level instead of aggregates), payment-service's outbox lag per company

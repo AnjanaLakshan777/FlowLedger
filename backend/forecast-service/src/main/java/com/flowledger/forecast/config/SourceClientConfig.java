@@ -11,7 +11,7 @@ import java.time.Duration;
 
 /**
  * Clients for the services that own the forecast inputs: bank-integration-service (account,
- * balance, statements, transactions) and payment-service (cheques).
+ * balance, statements, transactions) and payment-service (internal cheque scan and summary).
  */
 @Configuration
 @EnableConfigurationProperties({BankIntegrationProperties.class, PaymentServiceProperties.class})
