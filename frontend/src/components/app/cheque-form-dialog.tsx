@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
-import { Check } from "lucide-react"
+import { AlertTriangle, Check } from "lucide-react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { TODAY } from "@/data"
 import type { Cheque } from "@/data/types"
 import { lkDate } from "@/lib/calendar"
 import { CHEQUE_CATEGORIES, toCheque, validateCheque, type ChequeErrors, type ChequeInput } from "@/lib/cheques"
@@ -25,9 +25,9 @@ const blank = (date: string): Form => ({
 })
 
 /**
- * Add or edit a future cheque payment. MVP: the cheque is assumed to be paid on its expected clearing date, and the
- * forecast deducts it on that date only — the issue date just records when it was written. Changing the clearing date
- * moves the deduction; it is never deducted twice.
+ * Add or edit a future cheque payment. The forecast deducts it on its expected clearing date only — the issue date just
+ * records when it was written. Changing the clearing date moves the deduction; it is never deducted twice, and the
+ * cheque is never marked paid automatically.
  */
 export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSaved }: {
   open: boolean; onOpenChange: (o: boolean) => void
@@ -37,10 +37,12 @@ export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSa
   defaultDate: string
   onSaved?: (c: Cheque) => void
 }) {
-  const { cheques, actions } = useAppState()
+  const { cheques, actions, today } = useAppState()
   const [f, setF] = useState<Form>(blank(defaultDate))
   const [errors, setErrors] = useState<ChequeErrors>({})
-  useEffect(() => { if (open) { setF(cheque ? fromCheque(cheque) : blank(defaultDate)); setErrors({}) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  useEffect(() => { if (open) { setF(cheque ? fromCheque(cheque) : blank(defaultDate)); setErrors({}); setFailure(null) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const set = <K extends keyof Form>(k: K, v: Form[K]) => {
     setF((s) => ({ ...s, [k]: v }))
     setErrors((e) => ({ ...e, [k]: undefined })) // clear a field's error once it changes
@@ -49,15 +51,17 @@ export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSa
   const asLk = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? lkDate(iso) : "")
   const payees = useMemo(() => [...new Set(cheques.map((c) => c.payee))], [cheques])
   const input: ChequeInput = { ...f, amount: parseAmount(f.amount) }
-  const draft = Object.keys(validateCheque(input, cheques, TODAY, cheque?.cheque_no)).length === 0 ? toCheque(input, cheque ?? undefined) : null
+  const draft = Object.keys(validateCheque(input, cheques, today, cheque?.cheque_no)).length === 0 ? toCheque(input, cheque ?? undefined) : null
 
-  const save = () => {
-    const e = validateCheque(input, cheques, TODAY, cheque?.cheque_no)
+  const save = async () => {
+    const e = validateCheque(input, cheques, today, cheque?.cheque_no)
     setErrors(e)
     if (Object.keys(e).length) return
     const saved = toCheque(input, cheque ?? undefined)
-    if (cheque) actions.updateCheque(cheque.cheque_no, saved)
-    else actions.addCheque(saved)
+    setSaving(true)
+    const err = cheque ? await actions.updateCheque(cheque, saved) : await actions.addCheque(saved)
+    setSaving(false)
+    if (err) return setFailure(err)
     onOpenChange(false)
     onSaved?.(saved)
   }
@@ -67,8 +71,9 @@ export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSa
       <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{cheque ? `Edit cheque #${cheque.cheque_no}` : "Add cheque payment"}</DialogTitle>
-          <DialogDescription>A future payment, assumed to be paid on its expected clearing date. The forecast deducts it on that date only.</DialogDescription>
+          <DialogDescription>A future payment. The forecast deducts it on its expected clearing date only.</DialogDescription>
         </DialogHeader>
+        {failure && <Alert variant="destructive"><AlertTriangle /><AlertDescription>{failure}</AlertDescription></Alert>}
         <div className="grid gap-3.5 sm:grid-cols-2">
           <Field label="Payee" htmlFor="chq-payee" error={errors.payee}>
             <Input id="chq-payee" list="chq-payees" placeholder="e.g. Kelani Valley Foods" value={f.payee} onChange={(e) => set("payee", e.target.value)} aria-invalid={!!errors.payee || undefined} />
@@ -107,16 +112,29 @@ export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSa
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={save}><Check />{cheque ? "Save changes" : "Add cheque"}</Button>
+          <Button onClick={save} disabled={saving}><Check />{saving ? "Saving…" : cheque ? "Save changes" : "Add cheque"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-/** Cancel a scheduled cheque. A cancelled cheque no longer counts as a future outflow. */
+/** Cancel a scheduled cheque, with the reason the payment service records. A cancelled cheque no longer counts as a future outflow. */
 export function CancelChequeDialog({ cheque, onClose, onCancelled }: { cheque: Cheque | null; onClose: () => void; onCancelled?: (c: Cheque) => void }) {
   const { actions } = useAppState()
+  const [reason, setReason] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setReason(""); setError(null) }, [cheque])
+  const cancel = async (c: Cheque) => {
+    if (!reason.trim()) return setError("Enter the reason for cancelling.")
+    setSaving(true)
+    const err = await actions.cancelCheque(c, reason.trim())
+    setSaving(false)
+    if (err) return setError(err)
+    onClose()
+    onCancelled?.(c)
+  }
   return (
     <Dialog open={!!cheque} onOpenChange={(o) => !o && onClose()}>
       {cheque && (
@@ -127,10 +145,12 @@ export function CancelChequeDialog({ cheque, onClose, onCancelled }: { cheque: C
               {cheque.payee} · {fmt.lkr(cheque.amount)}. It will stop counting as a future outflow, and the forecast will be recalculated.
             </DialogDescription>
           </DialogHeader>
-          <Field label="Reason (optional)" htmlFor="cancel-reason"><Textarea id="cancel-reason" rows={2} placeholder="e.g. Paid by bank transfer instead" /></Field>
+          <Field label="Reason" htmlFor="cancel-reason" error={error ?? undefined}>
+            <Textarea id="cancel-reason" rows={2} placeholder="e.g. Paid by bank transfer instead" value={reason} onChange={(e) => { setReason(e.target.value); setError(null) }} aria-invalid={!!error || undefined} />
+          </Field>
           <DialogFooter>
             <Button variant="outline" onClick={onClose}>Keep cheque</Button>
-            <Button variant="destructive" onClick={() => { actions.setChequeStatus(cheque.cheque_no, "Cancelled"); onClose(); onCancelled?.(cheque) }}>Cancel cheque</Button>
+            <Button variant="destructive" disabled={saving} onClick={() => void cancel(cheque)}>{saving ? "Cancelling…" : "Cancel cheque"}</Button>
           </DialogFooter>
         </DialogContent>
       )}

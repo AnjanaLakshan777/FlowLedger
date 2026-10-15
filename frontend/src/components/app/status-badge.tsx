@@ -8,9 +8,9 @@ const MAP: Record<string, { variant: Variant; label?: string; icon?: "check" | "
   Confirmed: { variant: "soft", icon: "check" },
   Excluded: { variant: "muted", label: "Excluded (duplicate)" },
   Expected: { variant: "outline", label: "Expected" },
-  // cheques (MVP: future payments, assumed paid on their expected clearing date)
+  // cheques: never marked paid automatically; past the clearing date they stay Scheduled
   Scheduled: { variant: "outline" },
-  "Assumed paid": { variant: "muted" },
+  "Past clearing date": { variant: "attention" },
   Cancelled: { variant: "muted" },
   Bounced: { variant: "destructive", icon: "x" },
   // general

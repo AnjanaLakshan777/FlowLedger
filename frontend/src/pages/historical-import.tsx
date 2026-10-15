@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useAppState } from "@/components/app/app-state"
+import { NotConnected } from "@/components/app/not-connected"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { Field } from "@/components/app/field"
 import { StatRow } from "@/components/app/kpi-card"
@@ -31,7 +32,14 @@ function downloadTemplate() {
   URL.revokeObjectURL(url)
 }
 
+/** Live data: no backend API yet, so no demonstration data is shown as company data. */
 export default function HistoricalImportPage() {
+  const { mode } = useAppState()
+  return mode === "live" ? <NotConnected title="Historical Sales Import" needs={["Historical sales file upload, validation and approval (cash-management-service: sales_import_batches / sales_import_rows)"]} /> : <DemoHistoricalImportPage />
+}
+
+/** The designed screen with the demonstration data (demo mode and frontend tests). */
+function DemoHistoricalImportPage() {
   const { imports, actions, allow } = useAppState()
   const current = imports.find((r) => r.import_id === "IMP-0003")!
   const [view, setView] = useState<"issues" | "all">("issues")

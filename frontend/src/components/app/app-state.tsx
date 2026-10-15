@@ -1,123 +1,177 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react"
 import * as seed from "@/data"
-import type { AccessChange, BankTransaction, Cheque, ChequeStatus, DailySale, ImportRecord, Role, User } from "@/data/types"
+import type { AccessChange, BankAccount, BankTransaction, Cheque, DailySale, ImportRecord, Role, User } from "@/data/types"
+import type { ForecastRunSummary } from "@/lib/api/flowledger"
 import { upsertCheque } from "@/lib/cheques"
-import { buildForecast, forecastStart, isUpcoming, salesReceipts, type SaleForForecast } from "@/lib/forecast"
+import { buildForecast, forecastStart, isUpcoming, salesReceipts, type ForecastResult, type SaleForForecast } from "@/lib/forecast"
 import { addDays, sum } from "@/lib/format"
 import { can, canAccessPage, createUserError, deactivateError, roleChangeError, ROLE_LABEL, type PageId, type Permission } from "@/lib/permissions"
 
 export type { PageId }
 
+/** Data the screens load; each can be loading or have failed independently. */
+export type Resource = "sales" | "bank" | "cheques" | "forecast"
+export interface ResourceState { loading: boolean; error: string | null }
+
+/** The saved forecast run on screen, with every saved run for Forecast vs Actual (live data only). */
+export interface ForecastInfo {
+  run: ForecastRunSummary
+  runs: ForecastRunSummary[]
+  /** Cheques changed after this run was made; a new run would differ. */
+  outdated: boolean
+}
+
+export interface Kpis {
+  /** Null when the bank has not confirmed a balance yet — never 0. */
+  actualBalance: number | null
+  syncFailed: boolean; lastSync: string | null
+  receiptsToday: number; receiptsCount: number; paymentsToday: number; paymentsCount: number
+  cheques7dAmount: number; cheques7dCount: number; upcomingAmount: number; upcomingCount: number
+  /** Null when there is no forecast, or it could not estimate receipts. */
+  forecastReceipts: number | null; forecastOutflow: number | null; forecastClosing: number | null
+  lowestBalance: number | null; lowestDate: string | null
+}
+
+export interface AppActions {
+  /** Returns an error message, or null when signed in. */
+  signIn: (email: string, password?: string, remember?: boolean) => Promise<string | null>
+  signOut: () => void
+  switchCompany: (companyId: string) => void
+  saveSale: (s: DailySale) => Promise<string | null>
+  addCheque: (c: Cheque) => Promise<string | null>
+  updateCheque: (original: Cheque, c: Cheque) => Promise<string | null>
+  cancelCheque: (c: Cheque, reason: string) => Promise<string | null>
+  /** Asks the forecast service for a forecast from the current data. */
+  refreshForecast: () => Promise<string | null>
+  setImportStatus: (id: string, status: ImportRecord["status"]) => boolean
+  changeRole: (targetId: string, next: Role) => string | null
+  deactivateUser: (targetId: string) => string | null
+  createUser: (input: { name: string; email: string; role: Role }) => string | null
+}
+
 /**
- * In-memory app state seeded from the demonstration data in src/data/*.json.
- * Nothing is persisted: every action here is where a backend API call will go (e.g. POST /cheques).
+ * What every screen reads. "live" comes from the FlowLedger backend; "demo" is the fictional
+ * data in src/data, used by the frontend tests and the explicit demo mode (VITE_DEMO_MODE=true).
  */
+export interface AppState {
+  mode: "live" | "demo"
+  /** Today in Asia/Colombo (live) or the demo data's fixed date. */
+  today: string; now: string
+  signedIn: boolean; role: Role | null; roleLabel: string; currentUser: User | null
+  /** True while a stored session is being checked with the identity service. */
+  sessionLoading: boolean
+  company: { id: string; name: string } | null
+  companies: { id: string; name: string; roleLabel: string }[]
+  allow: (p: Permission) => boolean
+  canPage: (page: PageId) => boolean
+  accessLog: AccessChange[]; users: User[]; imports: ImportRecord[]
+  bankAccount: BankAccount | null; dailySales: DailySale[]; cheques: Cheque[]; transactions: BankTransaction[]
+  forecast: ForecastResult; forecastInfo: ForecastInfo | null
+  /** Demo only: inputs of the demonstration forecast, for the deferred (unrouted) Scenario Analysis page. */
+  forecastInputs?: Parameters<typeof buildForecast>[0]
+  kpis: Kpis
+  resources: Record<Resource, ResourceState>
+  reload: (r?: Resource) => void
+  actions: AppActions
+}
+
+export const Ctx = createContext<AppState | null>(null)
+
+export function useAppState() {
+  const v = useContext(Ctx)
+  if (!v) throw new Error("useAppState must be used inside an app state provider")
+  return v
+}
+
+const READY: ResourceState = { loading: false, error: null }
 
 /** Sales from this date onwards are checked against bank data (the demo bank history starts 28 Sep). */
 export const RECEIPTS_FROM = "2026-09-25"
 
 /**
- * MOCK AUTHENTICATION: "signing in" picks one of the demo users; there are no passwords or sessions.
- * The role always comes from that user's record, so nobody can choose their own role.
+ * DEMONSTRATION state seeded from src/data/*.json, for the frontend tests and the explicit demo
+ * mode. MOCK AUTHENTICATION: "signing in" picks one of the demo users; there are no passwords or
+ * sessions, and nothing is saved.
  */
-function useAppStateValue(initialUserId: string | null) {
+function useDemoStateValue(initialUserId: string | null): AppState {
   const [userId, setUserId] = useState<string | null>(initialUserId)
   const [accessLog, setAccessLog] = useState<AccessChange[]>([])
   const [dailySales, setDailySales] = useState<DailySale[]>(seed.dailySales)
   const [cheques, setCheques] = useState<Cheque[]>(seed.cheques)
-  const [transactions] = useState<BankTransaction[]>(seed.transactions) // read-only: comes from bank sync
+  const [transactions] = useState<BankTransaction[]>(seed.transactions)
   const [users, setUsers] = useState<User[]>(seed.users)
   const [imports, setImports] = useState<ImportRecord[]>(seed.importHistory)
 
   const currentUser = users.find((u) => u.user_id === userId && u.status === "Active") ?? null
-  const signedIn = !!currentUser
   const role: Role | null = currentUser?.role ?? null
-  /** Permission check for the signed-in user (see src/lib/permissions.ts). */
   const allow = useCallback((p: Permission) => can(role, p), [role])
   const canPage = useCallback((page: PageId) => canAccessPage(role, page), [role])
 
-  // Actual Bank Balance = the balance reported by the bank for the one current account; expected receipts are never added
   const bankAccount = seed.bankAccount
-  const actualBalance = bankAccount?.balance ?? 0
-  // a scheduled cheque whose debit is confirmed in bank data is cleared (never counted twice); stored records are not rewritten
+  const actualBalance = bankAccount?.balance ?? null
   const receipts = useMemo(() => salesReceipts(dailySales, transactions, RECEIPTS_FROM), [dailySales, transactions])
   const forecastInputs = useMemo(() => {
-    // entered sales the bank hasn't shown yet, then predictions for dates with no entry
     const awaiting: SaleForForecast[] = receipts
       .filter((r) => r.state === "not_in_bank")
       .map((r) => ({ date: r.sales_date, cash_sales: r.kind === "Cash" ? r.amount : 0, card_sales: r.kind === "Card" ? r.amount : 0, actual: true }))
     const entered = new Set(dailySales.map((s) => s.sales_date))
     const predicted: SaleForForecast[] = seed.predictedSales.filter((p) => !entered.has(p.date)).map((p) => ({ ...p, actual: false }))
-    return { openingBalance: actualBalance, start: forecastStart(seed.TODAY), today: seed.TODAY, sales: [...awaiting, ...predicted], cheques }
+    return { openingBalance: actualBalance ?? 0, start: forecastStart(seed.TODAY), today: seed.TODAY, sales: [...awaiting, ...predicted], cheques }
   }, [actualBalance, receipts, dailySales, cheques])
   const forecast = useMemo(() => buildForecast(forecastInputs), [forecastInputs])
 
-  const kpis = useMemo(() => {
+  const kpis = useMemo<Kpis>(() => {
     const today = seed.TODAY
-    const in7 = addDays(today, 7)
-    // actual bank activity only (excluded duplicates are not counted)
     const todays = transactions.filter((t) => t.txn_date === today && t.match_status !== "Excluded")
     const credits = todays.filter((t) => t.amount > 0)
     const debits = todays.filter((t) => t.amount < 0)
-    // MVP: scheduled cheques clearing after today are future payments; earlier ones are assumed paid
     const upcoming = cheques.filter((c) => isUpcoming(c, today))
-    const next7 = upcoming.filter((c) => c.expected_clear_date <= in7)
+    const next7 = upcoming.filter((c) => c.expected_clear_date <= addDays(today, 7))
     const low = forecast.weeks.reduce((m, w) => (w.lowest_balance < m.lowest_balance ? w : m), forecast.weeks[0])
     return {
-      actualBalance,
-      syncFailed: bankAccount?.sync_status === "Error",
-      lastSync: bankAccount?.last_sync ?? null,
-      receiptsToday: sum(credits, (t) => t.amount),
-      receiptsCount: credits.length,
-      paymentsToday: -sum(debits, (t) => t.amount),
-      paymentsCount: debits.length,
-      cheques7dAmount: sum(next7, (c) => c.amount),
-      cheques7dCount: next7.length,
-      upcomingAmount: sum(upcoming, (c) => c.amount),
-      upcomingCount: upcoming.length,
-      forecastReceipts: sum(forecast.weeks, (w) => w.receipts),
-      forecastOutflow: sum(forecast.weeks, (w) => w.cheque_out),
-      forecastClosing: forecast.weeks.at(-1)?.closing ?? 0,
-      lowestBalance: low.lowest_balance,
-      lowestDate: low.lowest_date,
+      actualBalance, syncFailed: bankAccount?.sync_status === "Error", lastSync: bankAccount?.last_sync ?? null,
+      receiptsToday: sum(credits, (t) => t.amount), receiptsCount: credits.length,
+      paymentsToday: -sum(debits, (t) => t.amount), paymentsCount: debits.length,
+      cheques7dAmount: sum(next7, (c) => c.amount), cheques7dCount: next7.length,
+      upcomingAmount: sum(upcoming, (c) => c.amount), upcomingCount: upcoming.length,
+      forecastReceipts: sum(forecast.weeks, (w) => w.receipts), forecastOutflow: sum(forecast.weeks, (w) => w.cheque_out),
+      forecastClosing: forecast.weeks.at(-1)?.closing ?? null, lowestBalance: low.lowest_balance, lowestDate: low.lowest_date,
     }
-  }, [transactions, cheques, forecast, actualBalance])
+  }, [transactions, cheques, forecast, actualBalance, bankAccount])
 
-  const actions = useMemo(() => {
-    // every action re-checks permission (the UI also hides what a role can't do); the backend must check again
+  const actions = useMemo<AppActions>(() => {
     const log = (action: AccessChange["action"], target: string, from: string, to: string) =>
       setAccessLog((rows) => [{ id: `AC-${rows.length + 1}`, at: seed.NOW, by: currentUser?.name ?? "", action, target, from, to }, ...rows])
     const find = (id: string) => users.find((u) => u.user_id === id)
+    const denied = "Your role can't do this."
     return {
-      /** Mock sign-in by email. Returns an error message, or null when signed in. */
-      signIn: (email: string) => {
+      signIn: async (email) => {
         const u = users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase())
         if (!u || u.status !== "Active") return "No active demo user with that email."
         setUserId(u.user_id)
         return null
       },
       signOut: () => setUserId(null),
-      /** Insert or replace the entry for a sales date. */
-      saveSale: (s: DailySale) => {
-        if (!can(role, "sales.enter")) return false
+      switchCompany: () => {},
+      saveSale: async (s) => {
+        if (!can(role, "sales.enter")) return denied
         setDailySales((rows) => [s, ...rows.filter((r) => r.sales_date !== s.sales_date)].sort((a, b) => b.sales_date.localeCompare(a.sales_date)))
-        return true
+        return null
       },
-      addCheque: (c: Cheque) => { if (!can(role, "cheques.manage")) return false; setCheques((rows) => upsertCheque(rows, c)); return true },
-      /** Replace the cheque that had `originalNo` (its number may have been corrected). */
-      updateCheque: (originalNo: string, c: Cheque) => { if (!can(role, "cheques.manage")) return false; setCheques((rows) => upsertCheque(rows, c, originalNo)); return true },
-      setChequeStatus: (chequeNo: string, status: ChequeStatus) => {
-        if (!can(role, "cheques.manage")) return false
-        setCheques((rows) => rows.map((c) => (c.cheque_no === chequeNo ? { ...c, status } : c)))
-        return true
+      addCheque: async (c) => { if (!can(role, "cheques.manage")) return denied; setCheques((rows) => upsertCheque(rows, c)); return null },
+      updateCheque: async (original, c) => { if (!can(role, "cheques.manage")) return denied; setCheques((rows) => upsertCheque(rows, c, original.cheque_no)); return null },
+      cancelCheque: async (c) => {
+        if (!can(role, "cheques.manage")) return denied
+        setCheques((rows) => rows.map((x) => (x.cheque_no === c.cheque_no ? { ...x, status: "Cancelled" } : x)))
+        return null
       },
-      setImportStatus: (id: string, status: ImportRecord["status"]) => {
+      refreshForecast: async () => null,
+      setImportStatus: (id, status) => {
         if (!can(role, "import.approve")) return false
         setImports((rows) => rows.map((r) => (r.import_id === id ? { ...r, status, approved_by: currentUser?.name ?? "", approved_at: seed.NOW } : r)))
         return true
       },
-      /** Returns an error message, or null when the role was changed. */
-      changeRole: (targetId: string, next: Role) => {
+      changeRole: (targetId, next) => {
         const t = find(targetId)
         const err = !currentUser || !t ? "User not found." : roleChangeError(currentUser, t, next, users)
         if (err) return err
@@ -125,8 +179,7 @@ function useAppStateValue(initialUserId: string | null) {
         log("Changed role", t!.name, ROLE_LABEL[t!.role], ROLE_LABEL[next])
         return null
       },
-      /** Returns an error message, or null when the user was deactivated. */
-      deactivateUser: (targetId: string) => {
+      deactivateUser: (targetId) => {
         const t = find(targetId)
         const err = !currentUser || !t ? "User not found." : deactivateError(currentUser, t, users)
         if (err) return err
@@ -134,8 +187,7 @@ function useAppStateValue(initialUserId: string | null) {
         log("Deactivated user", t!.name, t!.status, "Deactivated")
         return null
       },
-      /** Returns an error message, or null when the user was created (as Invited). */
-      createUser: (input: { name: string; email: string; role: Role }) => {
+      createUser: (input) => {
         const err = !currentUser ? "Not signed in." : createUserError(currentUser, input, users)
         if (err) return err
         const id = `U${users.reduce((m, u) => Math.max(m, Number(u.user_id.slice(1)) || 0), 0) + 1}`
@@ -146,20 +198,20 @@ function useAppStateValue(initialUserId: string | null) {
     }
   }, [currentUser, users, role])
 
-  return { signedIn, role, currentUser, allow, canPage, accessLog, bankAccount, dailySales, cheques, transactions, users, imports, receipts, forecastInputs, forecast, kpis, actions }
+  const companyName = seed.settings.find((s) => s.key === "company_name")?.value ?? "Demo company"
+  return {
+    mode: "demo", today: seed.TODAY, now: seed.NOW,
+    signedIn: !!currentUser, sessionLoading: false, role, roleLabel: role ? ROLE_LABEL[role] : "", currentUser,
+    company: { id: "demo", name: companyName }, companies: [],
+    allow, canPage, accessLog, users, imports,
+    bankAccount, dailySales, cheques, transactions, forecast, forecastInfo: null, forecastInputs, kpis,
+    resources: { sales: READY, bank: READY, cheques: READY, forecast: READY }, reload: () => {},
+    actions,
+  }
 }
 
-export type AppState = ReturnType<typeof useAppStateValue>
-const Ctx = createContext<AppState | null>(null)
-
-/** `initialUserId` is the demo user signed in at start (mock authentication); null starts signed out. */
+/** Demonstration data provider. `initialUserId` is the demo user signed in at start; null starts signed out. */
 export function AppStateProvider({ children, initialUserId = "U1" }: { children: ReactNode; initialUserId?: string | null }) {
-  const value = useAppStateValue(initialUserId)
+  const value = useDemoStateValue(initialUserId)
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
-}
-
-export function useAppState() {
-  const v = useContext(Ctx)
-  if (!v) throw new Error("useAppState must be used inside AppStateProvider")
-  return v
 }

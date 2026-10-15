@@ -739,14 +739,70 @@ confirmed.
   it is unavailable while any of these services is down.
 - Bank transactions, imports, and cheques are read without pagination; long
   histories make larger responses.
-- Cross-service calls were tested against fakes that follow the other
-  services' response formats, not against the running services.
+- Automated tests use fakes for the other services; the full flow was also
+  run once by hand against the running services (identity, bank-integration,
+  payment, forecast, cash-management) with test data.
 - Runs are created on request only; there are no scheduled or data-change
   runs and no outbox events.
 - The JWT validation, identity client, and authorization code is duplicated
   here as well.
 
-## 11. Unresolved Decisions
+## 11. Frontend Integration
+
+The React frontend reads live data from the services by default. The
+fictional data in `frontend/src/data` is used only by the frontend tests and
+by an explicit demo mode (`VITE_DEMO_MODE=true`), which shows a
+"Demonstration data" banner. A failed request is shown as an error with a
+retry; the frontend never falls back to demonstration data.
+
+### Connection and Sessions
+
+- All requests go to same-origin `/api/v1/...` paths. In development the Vite
+  server forwards each prefix to its service (identity 8080, cash-management
+  8081, bank-integration 8082, payment 8083, forecast 8084), so the services
+  need no CORS configuration. A deployment needs a gateway with the same
+  routes.
+- Sign-in uses the identity login API. The access token is kept in session
+  storage, or local storage when "Keep me signed in" is chosen; a 401 from
+  any service ends the session. The browser never holds service secrets.
+- After sign-in, `GET /me` gives the company and role. A backend
+  `COMPANY_ADMIN` uses the UI's administrator permission set and is labelled
+  "Company Admin"; a user with several memberships can switch company in the
+  header; a user with no membership sees a "No company access" screen. The UI
+  only hides what a role cannot use; the services enforce every permission.
+
+### Screens
+
+- Live data: Dashboard, Daily Sales, Bank Account, Cheque Payments,
+  Cash-Flow Forecast (calendar, weekly and daily views), and Forecast vs
+  Actual.
+- The forecast screens show the backend's results only; the browser does not
+  calculate a forecast. They show the backend's horizon and start date (the
+  day after the confirmed balance date), its stale-balance, insufficient
+  history, and unclassified-transaction labels, and no likely-range band
+  (the backend does not estimate one). Weeks are 7-day periods from the
+  forecast start. "Update forecast" asks the forecast service for a run.
+- Cheques are never shown as paid: a Scheduled cheque past its expected
+  clearing date is labelled "Past clearing date". The frontend rule that
+  treated such cheques as paid was removed. Cancelling requires a reason.
+- A missing confirmed balance is shown as "No confirmed balance yet", never
+  as 0. Expected receipts that were not estimated are shown as "Not
+  estimated".
+- Forecast vs Actual compares one saved run, chosen by the user (newest
+  first by default), because the baseline-run rule is open.
+- Not connected (no backend API yet), showing a "Not connected" notice
+  instead of demonstration data: Historical Sales Import and Users &
+  Settings.
+
+### Known Limitations
+
+- Daily sales have no note and no recorder name in the API; the screen shows
+  "You" or "Another user", and a recorded date cannot be changed.
+- There is no statement upload screen and no bank account configuration
+  screen yet, although both APIs exist.
+- Bank transactions have no value date in the API.
+
+## 12. Unresolved Decisions
 
 The following must be researched or agreed before implementation:
 
@@ -826,8 +882,20 @@ The following must be researched or agreed before implementation:
   schedule or when source data changes (event consumers and projections).
 - Whether forecasts should show confidence ranges; the UI demonstration
   shows low/high bands that the backend does not calculate.
+- The production entry point for the frontend: an API gateway (or other
+  reverse proxy) with the same /api/v1 routes, and its CORS and TLS setup.
+- Token lifetime handling in the browser: there are no refresh tokens, so a
+  user signs in again after the access token expires.
+- Whether daily sales may be corrected, whether they carry a note, and
+  whether other users may see who recorded them (the API has no name).
+- APIs for historical sales import, inviting or creating users, company
+  settings, and listing companies for a platform administrator.
+- The sample bank statement in the bank-integration test resources contains
+  personal data (names, a phone number, deposit references) and is already
+  in the Git history; whether to replace it with an anonymized fixture and
+  clean the history.
 
-## 12. Decision Log Maintenance
+## 13. Decision Log Maintenance
 
 - Update this document when a business or architecture decision is confirmed.
 - Keep unresolved questions visible until explicitly decided.

@@ -11,9 +11,19 @@ export type ChequeErrors = Partial<Record<"category" | "payee" | "amount" | "che
 
 const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(parseDate(s).getTime()) && parseDate(s).toISOString().slice(0, 10) === s
 
+/** A scheduled cheque whose expected clearing date is after `today`: a future outflow, and the only kind that can be edited. */
+export const isUpcoming = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date > today
+/**
+ * A scheduled cheque on or past its expected clearing date. It is NOT assumed paid: FlowLedger has no bank reconciliation yet,
+ * so it stays Scheduled and is shown as past its clearing date.
+ */
+export const isPastClearingDate = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date <= today
+/** Status shown for a cheque. */
+export const paymentState = (c: Cheque, today: string) => (c.status !== "Scheduled" ? c.status : isPastClearingDate(c, today) ? "Past clearing date" : "Scheduled")
+
 /**
  * Validates a cheque before saving. `originalNo` is the cheque being edited, so it doesn't count as its own duplicate.
- * The expected clearing date must be after `today`: an earlier date would already be paid and in the Actual Bank Balance.
+ * The expected clearing date must be after `today`, as the payment service requires.
  */
 export function validateCheque(f: ChequeInput, existing: Cheque[], today: string, originalNo?: string): ChequeErrors {
   const e: ChequeErrors = {}
@@ -25,7 +35,7 @@ export function validateCheque(f: ChequeInput, existing: Cheque[], today: string
   if (!isIsoDate(f.cheque_date)) e.cheque_date = "Enter a valid cheque issue date."
   if (!isIsoDate(f.expected_clear_date)) e.expected_clear_date = "Enter the expected clearing date."
   else if (isIsoDate(f.cheque_date) && f.expected_clear_date < f.cheque_date) e.expected_clear_date = "Clearing can't be before the cheque issue date."
-  else if (f.expected_clear_date <= today) e.expected_clear_date = "Choose a date after today — earlier payments are already in the Actual Bank Balance."
+  else if (f.expected_clear_date <= today) e.expected_clear_date = "Choose an expected clearing date after today."
   return e
 }
 

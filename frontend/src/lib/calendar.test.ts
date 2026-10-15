@@ -57,7 +57,7 @@ describe("calendar navigation", () => {
 })
 
 describe("calendar data", () => {
-  const balance = seed.bankAccount!.balance
+  const balance = seed.bankAccount!.balance!
   const sales = seed.predictedSales.filter((p) => !seed.dailySales.some((s) => s.sales_date === p.date)).map((p) => ({ ...p, actual: false }))
   const f = buildForecast({ openingBalance: balance, start: forecastStart(seed.TODAY), sales, cheques: seed.cheques })
   const cal = buildCalendar({ today: seed.TODAY, actualBalance: balance, transactions: seed.transactions, forecastDays: f.days })

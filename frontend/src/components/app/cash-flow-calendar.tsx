@@ -6,13 +6,12 @@ import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { TODAY } from "@/data"
 import type { Cheque } from "@/data/types"
 import {
   buildCalendar, canStep, describeDay, lkDate, monthGrid, monthLabel, monthStart, navigate, weekdayLabel, weekStart,
   type CalendarDay, type CalendarEvent, type CalendarMode, type CalendarNav, type EventKind, type NavAction,
 } from "@/lib/calendar"
-import { isUpcoming } from "@/lib/forecast"
+import { isUpcoming } from "@/lib/cheques"
 import { addDays, fmt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAppState } from "./app-state"
@@ -49,14 +48,17 @@ function indicators(day?: CalendarDay): Indicator[] {
  * Calendar-first view of the cash-flow forecast. Days up to today show bank data (Actual Bank Balance); later days show
  * the forecast. Cheques are deducted on their expected bank clearing date, never on the cheque date.
  */
-export function CashFlowCalendar({ initialSelected = TODAY, initialMode = "month" }: { initialSelected?: string; initialMode?: CalendarMode }) {
-  const { forecast, transactions, kpis, cheques, allow } = useAppState()
+export function CashFlowCalendar({ initialSelected, initialMode = "month" }: { initialSelected?: string; initialMode?: CalendarMode }) {
+  const { forecast, transactions, kpis, cheques, allow, today: TODAY } = useAppState()
   const canEdit = allow("cheques.manage")
+  // the confirmed balance; the forecast starts from it, so it exists whenever the calendar has forecast days
+  const actualBalance = kpis.actualBalance ?? forecast.days[0]?.opening ?? 0
   const cal = useMemo(
-    () => buildCalendar({ today: TODAY, actualBalance: kpis.actualBalance, transactions, forecastDays: forecast.days }),
-    [forecast.days, transactions, kpis.actualBalance]
+    () => buildCalendar({ today: TODAY, actualBalance, transactions, forecastDays: forecast.days }),
+    [forecast.days, transactions, actualBalance, TODAY]
   )
-  const [nav, setNav] = useState<CalendarNav>({ mode: initialMode, anchor: initialSelected, selected: initialSelected })
+  const start = initialSelected ?? TODAY
+  const [nav, setNav] = useState<CalendarNav>({ mode: initialMode, anchor: start, selected: start })
   const [focusDate, setFocusDate] = useState<string | null>(null)
   const [form, setForm] = useState<{ open: boolean; cheque: Cheque | null }>({ open: false, cheque: null })
   const [cancelling, setCancelling] = useState<Cheque | null>(null)
@@ -176,6 +178,7 @@ const cellClass = (day: CalendarDay | undefined, selected: boolean) => cn(
 )
 
 function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProps & { anchor: string }) {
+  const { today: TODAY } = useAppState()
   const rows = monthGrid(anchor)
   const month = monthStart(anchor).slice(0, 7)
   return (
@@ -230,6 +233,7 @@ function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProp
 }
 
 function WeekView({ days, cal, selected, onSelect, onKey, cellRef }: ViewProps & { days: string[] }) {
+  const { today: TODAY } = useAppState()
   const recs = days.map((d) => cal.days.get(d)).filter(Boolean) as CalendarDay[]
   const actual = recs.filter((r) => r.basis === "actual")
   const fc = recs.filter((r) => r.basis === "forecast")
@@ -291,6 +295,7 @@ function DayDetail({ iso, day, cheques, canEdit, onAdd, onEdit, onCancel, onGoTo
   iso: string; day?: CalendarDay; cheques: Cheque[]; canEdit: boolean
   onAdd: () => void; onEdit: (c: Cheque) => void; onCancel: (c: Cheque) => void; onGoTo: (d: string) => void
 }) {
+  const { today: TODAY } = useAppState()
   const heading = `${weekdayLabel(iso, "long")} ${lkDate(iso)}`
   const byNo = new Map(cheques.map((c) => [c.cheque_no, c]))
   // written on this date but deducted on another (their clearing date) — shown for context, not counted here

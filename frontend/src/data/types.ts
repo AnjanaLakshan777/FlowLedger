@@ -3,8 +3,8 @@ export type SyncStatus = "Synced" | "Error"
 /** The company's single current account (MVP). Card sales pass through a separate card settlement account, which is not tracked here. */
 export interface BankAccount {
   bank: string; account_name: string; account_type: "Current"; account_masked: string; branch: string; currency: string
-  /** Actual Bank Balance — latest balance reported by the bank, as of `balance_as_of`. */
-  balance: number; balance_as_of: string; sync_status: SyncStatus
+  /** Actual Bank Balance — latest balance reported by the bank, as of `balance_as_of`. Null when the bank has confirmed none yet (never shown as 0). */
+  balance: number | null; balance_as_of: string; sync_status: SyncStatus
   /** Last successful sync. */
   last_sync: string; integration: string; error: string
 }
@@ -23,12 +23,14 @@ export interface DailySale {
 }
 export type ChequeCategory = "Supplier Payment" | "Salary" | "Tax" | "Other Expenses"
 /**
- * MVP: a cheque is a scheduled future payment, assumed to be paid on its expected clearing date.
- * There is no bank-based clearing or bounce detection yet; Cancelled is the only status a user can set.
- * Bounced is a recorded outcome only (no detection or bounce workflow): never forecast and never assumed paid.
+ * A cheque is a scheduled payment, forecast on its expected clearing date. It is never marked paid automatically:
+ * a Scheduled cheque past that date stays Scheduled until bank reconciliation exists. Cancelled is the only status a user sets.
+ * Bounced exists only in the demonstration data (no backend status): never forecast.
  */
 export type ChequeStatus = "Scheduled" | "Cancelled" | "Bounced"
 export interface Cheque {
+  /** Backend ID and version; set for cheques loaded from the payment service. */
+  id?: string; version?: number
   cheque_no: string; payee: string; category: ChequeCategory; amount: number; cheque_date: string
   /** The forecast deducts the amount on this date (never on the cheque date). */
   expected_clear_date: string
@@ -43,12 +45,14 @@ export interface ForecastDay {
   /** Sales receipts expected to arrive in the current account on this date. */
   receipts: number
   cheque_out: number; cheques: number; closing: number; low: number; high: number; top_outflows: string
+  /** False when the backend had too little bank history to estimate receipts; `receipts` is then 0 and not a forecast. */
+  inflows_estimated?: boolean
   /** Sales money expected in the current account this day (cash deposits, card settlement transfers). */
   arrivals: ForecastArrival[]
   /** Outstanding cheques the forecast places on this day, largest first. */
   payments: ForecastPayment[]
 }
-export interface ForecastArrival { kind: "Cash" | "Card"; sales_date: string; amount: number; /** true = entered sales not yet in bank data; false = predicted */ actual: boolean }
+export interface ForecastArrival { kind: "Cash" | "Card"; /** null when estimated from bank deposit history rather than from a sales date */ sales_date: string | null; amount: number; /** true = entered sales not yet in bank data; false = predicted */ actual: boolean }
 export interface ForecastPayment { cheque_no: string; payee: string; category: ChequeCategory; amount: number; date: string }
 export interface ForecastWeek {
   week: number; week_start: string; week_end: string; opening: number; cash_sales: number; card_sales: number; receipts: number; cheque_out: number
@@ -63,9 +67,12 @@ export interface Shortage {
   /** Outstanding cheques expected to clear in that window, largest first. */
   payments: ForecastPayment[]
 }
+/** Null where a value is unknown: no inflow estimate, or no imported bank statement for those days. */
 export interface ForecastVsActual {
-  week_start: string; week_end: string; forecast_in: number; actual_in: number; diff_in: number; forecast_out: number; actual_out: number
-  diff_out: number; forecast_closing: number; actual_closing: number; diff_closing: number
+  week_start: string; week_end: string; forecast_in: number | null; actual_in: number; diff_in: number | null; forecast_out: number; actual_out: number
+  diff_out: number; forecast_closing: number; actual_closing: number | null; diff_closing: number | null
+  /** Days in the period with bank-confirmed actuals (live data only). */
+  days_compared?: number
 }
 export interface ImportRow { row: number; date: string; cash_sales: number | null; card_payments: number; status: "Valid" | "Error" | "Warning"; issue: string }
 export interface ImportRecord {

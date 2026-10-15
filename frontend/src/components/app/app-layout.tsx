@@ -6,7 +6,6 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { settings } from "@/data"
 import { fmt, initials } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAppState } from "./app-state"
@@ -18,7 +17,7 @@ import { StateDot } from "./state-dot"
 import { useTheme } from "./theme-provider"
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const { role, canPage, kpis, forecast, imports } = useAppState()
+  const { role, canPage, kpis, forecast, imports, mode } = useAppState()
   const awaiting = imports.filter((i) => i.status === "Awaiting approval").length
   const counts: Partial<Record<string, { n: number; critical?: boolean; label: string }>> = {
     forecast: { n: forecast.days.filter((d) => d.closing < 0).length, critical: true, label: "Cash Shortage warnings" },
@@ -66,8 +65,17 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         ))}
       </nav>
       {canPage("bank-account") && <div className="border-sidebar-border text-muted-foreground grid gap-1.5 border-t px-4 py-3 text-xs">
-        <StateDot tone={kpis.syncFailed ? "error" : "ok"}>{kpis.syncFailed ? "Bank sync failed" : "Bank synced"}</StateDot>
-        <span className="flex items-center gap-1.5"><Clock className="size-3.5" />Last successful sync {fmt.dateTime(kpis.lastSync)}</span>
+        {mode === "live" ? (
+          <>
+            <StateDot tone={kpis.syncFailed ? "error" : "ok"}>{kpis.syncFailed ? "Latest statement rejected" : "Bank statements"}</StateDot>
+            <span className="flex items-center gap-1.5"><Clock className="size-3.5" />{kpis.lastSync ? <>Last imported {fmt.dateTime(kpis.lastSync)}</> : "No statement imported yet"}</span>
+          </>
+        ) : (
+          <>
+            <StateDot tone={kpis.syncFailed ? "error" : "ok"}>{kpis.syncFailed ? "Bank sync failed" : "Bank synced"}</StateDot>
+            <span className="flex items-center gap-1.5"><Clock className="size-3.5" />Last successful sync {fmt.dateTime(kpis.lastSync)}</span>
+          </>
+        )}
       </div>}
     </div>
   )
@@ -77,11 +85,15 @@ const NOTIF_ICON = { critical: AlertTriangle, error: XCircle, warn: AlertTriangl
 
 /** Notifications are worked out from current state (a notification service will replace this). */
 function useNotifications() {
-  const { forecast, bankAccount, imports, canPage } = useAppState()
+  const { forecast, bankAccount, imports, canPage, mode } = useAppState()
   const out: { id: string; level: keyof typeof NOTIF_ICON; title: string; body: string; path: string }[] = []
   const sh = forecast.shortages[0]
   if (sh) out.push({ id: "shortage", level: "critical", title: `Cash Shortage expected ${fmt.day(sh.first_date)}`, body: `Cash Shortage of ${fmt.lkr0(sh.shortage_amount)}${sh.payments[0] ? ` · largest payment ${sh.payments[0].payee}` : ""}.`, path: "/forecast" })
-  if (bankAccount?.sync_status === "Error") out.push({ id: "sync", level: "error", title: "Bank sync failed", body: `Showing the Actual Bank Balance from ${fmt.dateTime(bankAccount.last_sync)}.`, path: "/bank-account" })
+  if (bankAccount?.sync_status === "Error") {
+    out.push(mode === "live"
+      ? { id: "sync", level: "error", title: "Latest bank statement was rejected", body: bankAccount.error, path: "/bank-account" }
+      : { id: "sync", level: "error", title: "Bank sync failed", body: `Showing the Actual Bank Balance from ${fmt.dateTime(bankAccount.last_sync)}.`, path: "/bank-account" })
+  }
   const waiting = imports.filter((i) => i.status === "Awaiting approval")
   if (waiting.length) out.push({ id: "import", level: "info", title: "Historical import awaiting approval", body: waiting.map((i) => i.import_id).join(", "), path: "/historical-import" })
   // only notifications about pages this role can open
@@ -89,7 +101,7 @@ function useNotifications() {
 }
 
 export function AppLayout() {
-  const { role, currentUser, users, canPage, actions } = useAppState()
+  const { role, roleLabel, currentUser, users, canPage, actions, mode, company, companies } = useAppState()
   const { theme, setTheme } = useTheme()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -97,9 +109,9 @@ export function AppLayout() {
   const navigate = useNavigate()
   const notifications = useNotifications()
   const page = NAV_ITEMS.find((n) => location.pathname.startsWith(n.path))
-  const company = settings.find((s) => s.key === "company_name")?.value
   const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor
-  if (!currentUser || !role) return null
+  if (!currentUser) return null
+  if (!role) return <NoCompanyAccess name={currentUser.name} onSignOut={() => { actions.signOut(); navigate("/login") }} />
 
   return (
     <div className="min-h-svh lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
@@ -123,10 +135,32 @@ export function AppLayout() {
             {page?.group} / <span className="text-foreground font-medium">{page?.label}</span>
           </div>
           <div className="flex-1" />
-          <div className="hidden h-8 items-center gap-2 rounded-md border px-2.5 text-[13px] whitespace-nowrap md:flex" title="Company">
-            <span className="bg-chart-3 size-2 rounded-[2px]" />
-            {company}
-          </div>
+          {companies.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="hover:bg-accent hidden h-8 items-center gap-2 rounded-md border px-2.5 text-[13px] whitespace-nowrap md:flex" title="Company">
+                  <span className="bg-chart-3 size-2 rounded-[2px]" />
+                  {company?.name}
+                  <ChevronDown className="text-muted-foreground size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel>Company</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={company?.id} onValueChange={(id) => { actions.switchCompany(id); navigate("/") }}>
+                  {companies.map((c) => (
+                    <DropdownMenuRadioItem key={c.id} value={c.id}>
+                      <span className="truncate">{c.name}</span><span className="text-muted-foreground ml-auto pl-2 text-xs">{c.roleLabel}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div className="hidden h-8 items-center gap-2 rounded-md border px-2.5 text-[13px] whitespace-nowrap md:flex" title="Company">
+              <span className="bg-chart-3 size-2 rounded-[2px]" />
+              {company?.name}
+            </div>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Theme"><ThemeIcon /></Button>
@@ -174,7 +208,7 @@ export function AppLayout() {
                 <span className="bg-primary/10 text-primary dark:text-chart-2 grid size-7 place-items-center rounded-full text-[11.5px] font-semibold">{initials(currentUser.name)}</span>
                 <span className="hidden text-left leading-tight sm:block">
                   <span className="block text-[13px] font-medium">{currentUser.name}</span>
-                  <span className="text-muted-foreground block text-[11.5px]">{ROLE_LABEL[role]}</span>
+                  <span className="text-muted-foreground block text-[11.5px]">{roleLabel}</span>
                 </span>
                 <ChevronDown className="text-muted-foreground size-3.5" />
               </button>
@@ -182,31 +216,52 @@ export function AppLayout() {
             <DropdownMenuContent align="end" className="w-72">
               <DropdownMenuLabel>{currentUser.email}</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {/* mock authentication: switching signs in as another demo user; roles can't be chosen here */}
-              <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">Mock sign-in as demo user</DropdownMenuLabel>
-              <DropdownMenuRadioGroup value={currentUser.user_id} onValueChange={(id) => {
-                const u = users.find((x) => x.user_id === id)
-                if (u && !actions.signIn(u.email)) navigate(`/${homePage(u.role) ?? ""}`)
-              }}>
-                {users.filter((u) => u.status === "Active").map((u) => (
-                  <DropdownMenuRadioItem key={u.user_id} value={u.user_id}>
-                    <span className="truncate">{u.name}</span><span className="text-muted-foreground ml-auto pl-2 text-xs">{ROLE_LABEL[u.role]}</span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
+              {/* demo mode only: switching signs in as another demo user; roles can't be chosen here */}
+              {mode === "demo" && <>
+                <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">Mock sign-in as demo user</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={currentUser.user_id} onValueChange={async (id) => {
+                  const u = users.find((x) => x.user_id === id)
+                  if (u && !(await actions.signIn(u.email))) navigate(`/${homePage(u.role) ?? ""}`)
+                }}>
+                  {users.filter((u) => u.status === "Active").map((u) => (
+                    <DropdownMenuRadioItem key={u.user_id} value={u.user_id}>
+                      <span className="truncate">{u.name}</span><span className="text-muted-foreground ml-auto pl-2 text-xs">{ROLE_LABEL[u.role]}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+              </>}
               {canPage("users-settings") && <DropdownMenuItem asChild><Link to="/users-settings"><Users />Users & Settings</Link></DropdownMenuItem>}
               <DropdownMenuItem onSelect={() => { actions.signOut(); navigate("/login") }}><LogOut />Sign out</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        <div role="note" className="bg-muted text-muted-foreground flex items-center gap-2 border-b px-4 py-1.5 text-xs md:px-6">
-          <FlaskConical className="size-3.5 shrink-0" />
-          <span><b className="text-foreground font-medium">Demonstration data.</b> Fictional company and amounts — no bank is connected. Changes stay in this browser tab and are not saved.</span>
-        </div>
+        {mode === "demo" && (
+          <div role="note" className="bg-muted text-muted-foreground flex items-center gap-2 border-b px-4 py-1.5 text-xs md:px-6">
+            <FlaskConical className="size-3.5 shrink-0" />
+            <span><b className="text-foreground font-medium">Demonstration data.</b> Fictional company and amounts — no bank is connected. Changes stay in this browser tab and are not saved.</span>
+          </div>
+        )}
         <main className="mx-auto grid w-full max-w-[1440px] grid-cols-[minmax(0,1fr)] content-start gap-5 p-4 md:p-6">
           <Outlet />
         </main>
+      </div>
+    </div>
+  )
+}
+
+/** Signed in, but with no active company membership (for example a platform administrator). */
+function NoCompanyAccess({ name, onSignOut }: { name: string; onSignOut: () => void }) {
+  return (
+    <div className="grid min-h-svh place-items-center p-6">
+      <div className="grid max-w-[46ch] justify-items-center gap-3 rounded-xl border p-8 text-center">
+        <Logo />
+        <h1 className="text-[17px] font-semibold">No company access</h1>
+        <p className="text-muted-foreground text-sm">
+          {name}, your account has no active company membership, so there are no company pages to show.
+          Ask a company admin to add you to a company.
+        </p>
+        <Button variant="outline" onClick={onSignOut}><LogOut />Sign out</Button>
       </div>
     </div>
   )

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { BankTransaction, Cheque, DailySale } from "@/data/types"
-import { buildForecast, expectedArrivalDate, FORECAST_WEEKS, isAssumedPaid, isUpcoming, salesReceipts, type SaleForForecast } from "./forecast"
+import { isPastClearingDate, paymentState } from "./cheques"
+import { buildForecast, expectedArrivalDate, FORECAST_WEEKS, isUpcoming, salesReceipts, type SaleForForecast } from "./forecast"
 
 // A small, fully controlled forecast: two weeks from Monday 12/10/2026 with no sales unless a test adds them.
 const START = "2026-10-12"
@@ -48,10 +49,10 @@ describe("cheques are deducted on the expected bank clearing date", () => {
     expect(day(f, "2026-10-23").cheque_out).toBe(0)
   })
 
-  it("a bounced cheque (recorded outcome) is never deducted and never assumed paid", () => {
+  it("a bounced cheque (recorded outcome) is never deducted and never shown as paid", () => {
     const bounced = cheque({ status: "Bounced", expected_clear_date: "2026-10-09", cheque_date: "2026-10-08" })
     expect(isUpcoming(bounced, "2026-10-10")).toBe(false)
-    expect(isAssumedPaid(bounced, "2026-10-10")).toBe(false)
+    expect(isPastClearingDate(bounced, "2026-10-10")).toBe(false)
     expect(run([cheque({ status: "Bounced" })]).days.every((d) => d.cheque_out === 0)).toBe(true)
   })
 
@@ -96,15 +97,16 @@ describe("cash-shortage warnings follow the cheque", () => {
   })
 })
 
-describe("MVP: every cheque is paid on its expected clearing date", () => {
-  it("a cheque clearing after today is upcoming; on or before today it is assumed paid", () => {
+describe("a cheque past its expected clearing date is never assumed paid", () => {
+  it("a cheque clearing after today is upcoming; on or before today it stays Scheduled, past its clearing date", () => {
     expect(isUpcoming(cheque({ expected_clear_date: "2026-10-11" }), "2026-10-10")).toBe(true)
-    expect(isAssumedPaid(cheque({ expected_clear_date: "2026-10-10" }), "2026-10-10")).toBe(true)
+    expect(isPastClearingDate(cheque({ expected_clear_date: "2026-10-10" }), "2026-10-10")).toBe(true)
+    expect(paymentState(cheque({ expected_clear_date: "2026-10-10" }), "2026-10-10")).toBe("Past clearing date")
     expect(isUpcoming(cheque({ expected_clear_date: "2026-10-10" }), "2026-10-10")).toBe(false)
-    expect(isAssumedPaid(cheque({ status: "Cancelled", expected_clear_date: "2026-10-01" }), "2026-10-10")).toBe(false)
+    expect(isPastClearingDate(cheque({ status: "Cancelled", expected_clear_date: "2026-10-01" }), "2026-10-10")).toBe(false)
   })
 
-  it("does not deduct an assumed-paid cheque again — it is already in the Actual Bank Balance", () => {
+  it("does not deduct a cheque whose clearing date passed before the forecast starts", () => {
     const paid = cheque({ cheque_no: "009800", expected_clear_date: "2026-10-09", cheque_date: "2026-10-08" })
     const f = buildForecast({ openingBalance: 1_000_000, start: START, today: "2026-10-10", weeks: 2, sales: [], cheques: [paid] })
     expect(f.days.every((d) => d.cheque_out === 0)).toBe(true)

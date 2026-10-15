@@ -1,8 +1,12 @@
 import type { BankTransaction, Cheque, DailySale, ForecastArrival, ForecastDay, ForecastWeek, Shortage } from "@/data/types"
+import { isUpcoming } from "./cheques"
 import { addDays, parseDate } from "./format"
 
+export { isUpcoming }
+
 /**
- * FlowLedger forecast rules (demonstration calculation — will move to the forecasting service)
+ * DEMONSTRATION forecast for the fictional data in src/data (demo mode and frontend tests only). Live screens show the
+ * forecast service's results and never calculate a forecast in the browser.
  * - Opening balance = Actual Bank Balance of the company's one current account (never includes expected receipts).
  * - Only cash sales and card payments are predicted. Customer cheques and direct transfers are not.
  * - Sales are counted on the date they are expected to reach the company current account, not the sales date:
@@ -11,9 +15,9 @@ import { addDays, parseDate } from "./format"
  * - Cash deposits and card settlement transfers (from the separate card settlement account) are the arrival of sales
  *   already counted, never new income. The card settlement account is not a company bank account in FlowLedger.
  * - Sales already seen in bank data are part of the Actual Bank Balance and are not expected again.
- * - Outflows = scheduled cheques, deducted once on their expected clearing date. MVP assumption: every cheque is paid
- *   on that date — once it has passed, the cheque is assumed paid and is part of the Actual Bank Balance, so it is never
- *   deducted again. Cancelled cheques are excluded. (No bank-based clearing or bounce detection yet.)
+ * - Outflows = scheduled cheques, deducted once on their expected clearing date within the forecast. A cheque whose
+ *   clearing date has already passed is not deducted, and it is not marked paid either: it stays Scheduled.
+ *   Cancelled cheques are excluded. (No bank-based clearing or bounce detection yet.)
  * - A shortage is any day whose expected balance is below LKR 0 — even if the week ends positive.
  */
 
@@ -45,10 +49,6 @@ export function expectedArrivalDate(salesDate: string, kind: ReceiptKind = "Cash
   return addDays(salesDate, ARRIVAL_SCHEDULE[kind][parseDate(salesDate).getUTCDay()])
 }
 
-/** A scheduled cheque whose expected clearing date is after `today` — a forecast outflow on that date. */
-export const isUpcoming = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date > today
-/** MVP assumption: a scheduled cheque is paid on its expected clearing date; after that it is in the Actual Bank Balance. */
-export const isAssumedPaid = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date <= today
 
 /** First Monday after `today` — forecast weeks run Monday to Sunday. */
 export function forecastStart(today: string) {
@@ -91,7 +91,7 @@ export function salesReceipts(sales: DailySale[], txns: BankTransaction[], from:
 export function buildForecast(opts: {
   openingBalance: number
   start: string
-  /** Cheques clearing on or before this date are assumed paid (default: the day before `start`). */
+  /** Cheques clearing on or before this date are not deducted (default: the day before `start`); they are never marked paid. */
   today?: string
   weeks?: number
   /** Entered sales not yet seen in bank data, plus predicted sales for dates without an entry. */

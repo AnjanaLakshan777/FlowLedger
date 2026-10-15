@@ -97,7 +97,9 @@ export function buildCalendar(opts: { today: string; actualBalance: number; tran
       ...f.arrivals.map((a, i) => ({
         id: `${f.date}-${a.kind}-${i}`, kind: (a.kind === "Cash" ? "cash" : "card") as EventKind, status: "expected" as const,
         title: a.kind === "Cash" ? "Expected cash deposit" : "Expected card settlement transfer",
-        detail: `Sales of ${weekdayLabel(a.sales_date)} ${lkDate(a.sales_date)} · ${a.actual ? "entered, not yet in bank data" : "predicted"}`,
+        detail: a.sales_date
+          ? `Sales of ${weekdayLabel(a.sales_date)} ${lkDate(a.sales_date)} · ${a.actual ? "entered, not yet in bank data" : "predicted"}`
+          : "Estimated from the bank's recent deposits on this weekday",
         amount: a.amount,
       })),
       ...f.payments.map((p) => ({

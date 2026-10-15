@@ -23,7 +23,8 @@ import { negativeRuns, type NegativeRun } from "@/lib/runs"
 import { cn } from "@/lib/utils"
 
 export default function ScenariosPage() {
-  const { forecastInputs, forecast } = useAppState()
+  const { forecastInputs: inputs, forecast } = useAppState()
+  const forecastInputs = inputs!
   const options = forecast.days.slice(0, 35).filter((d) => d.receipts > 0)
   const [delayOn, setDelayOn] = useState(true)
   const [day, setDay] = useState(options[0]?.date ?? "")

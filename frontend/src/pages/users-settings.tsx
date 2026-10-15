@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAppState } from "@/components/app/app-state"
+import { NotConnected } from "@/components/app/not-connected"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { Field } from "@/components/app/field"
 import { PageHeader } from "@/components/app/page-header"
@@ -27,7 +28,14 @@ import { requiresBackend } from "@/lib/demo"
 import { fmt, initials } from "@/lib/format"
 import { can, deactivateError, PERMISSION_LABEL, ROLE_DESCRIPTION, ROLE_LABEL, ROLES, roleChangeError } from "@/lib/permissions"
 
+/** Live data: no backend API yet, so no demonstration data is shown as company data. */
 export default function UsersSettingsPage() {
+  const { mode } = useAppState()
+  return mode === "live" ? <NotConnected title="Users & Settings" needs={["Inviting or creating company users (identity-service; only self-registration exists)","Company settings and bank account configuration screens (the bank account API exists; this screen is not connected to it yet)","Access-change history (identity audit events are deferred)"]} /> : <DemoUsersSettingsPage />
+}
+
+/** The designed screen with the demonstration data (demo mode and frontend tests). */
+function DemoUsersSettingsPage() {
   const { users, currentUser, accessLog, allow, actions } = useAppState()
   const [params] = useSearchParams()
   const [tab, setTab] = useState(params.get("tab") ?? "users")

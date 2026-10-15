@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { Toaster } from "@/components/ui/sonner"
 import { AppLayout } from "@/components/app/app-layout"
 import { AppStateProvider, useAppState, type PageId } from "@/components/app/app-state"
+import { LiveAppStateProvider } from "@/components/app/live-app-state"
 import { HomeRedirect, RequireAccess } from "@/components/app/require-access"
 import { ThemeProvider } from "@/components/app/theme-provider"
 import { lazy, Suspense, type ReactNode } from "react"
@@ -27,17 +28,25 @@ const ROUTES: { path: string; page: PageId; render: () => ReactNode }[] = [
   { path: "users-settings", page: "users-settings", render: () => <UsersSettingsPage /> },
 ]
 
+/** Live backend data unless the fictional demonstration data is asked for explicitly. */
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true"
+const StateProvider = ({ children }: { children: ReactNode }) =>
+  DEMO_MODE ? <AppStateProvider>{children}</AppStateProvider> : <LiveAppStateProvider>{children}</LiveAppStateProvider>
+
+const Loading = () => <div className="text-muted-foreground p-6 text-sm">Loading…</div>
+
 function Protected({ children }: { children: ReactNode }) {
-  const { signedIn } = useAppState()
+  const { signedIn, sessionLoading } = useAppState()
+  if (sessionLoading) return <Loading />
   return signedIn ? <>{children}</> : <Navigate to="/login" replace />
 }
 
 export default function App() {
   return (
     <ThemeProvider>
-      <AppStateProvider>
+      <StateProvider>
         <BrowserRouter>
-          <Suspense fallback={<div className="text-muted-foreground p-6 text-sm">Loading…</div>}>
+          <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route element={<Protected><AppLayout /></Protected>}>
@@ -51,7 +60,7 @@ export default function App() {
           </Suspense>
         </BrowserRouter>
         <Toaster position="top-right" />
-      </AppStateProvider>
+      </StateProvider>
     </ThemeProvider>
   )
 }

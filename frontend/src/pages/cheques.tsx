@@ -10,27 +10,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAppState } from "@/components/app/app-state"
 import { CancelChequeDialog, ChequeFormDialog } from "@/components/app/cheque-form-dialog"
 import { CellStack, DataTable } from "@/components/app/data-table"
+import { DataState, useNotReady } from "@/components/app/data-state"
 import { StatRow } from "@/components/app/kpi-card"
 import { PageHeader } from "@/components/app/page-header"
 import { SearchInput } from "@/components/app/search-input"
 import { StatusBadge } from "@/components/app/status-badge"
-import { TODAY } from "@/data"
 import type { Cheque } from "@/data/types"
-import { CHEQUE_CATEGORIES } from "@/lib/cheques"
-import { FORECAST_WEEKS, isAssumedPaid, isUpcoming } from "@/lib/forecast"
+import { CHEQUE_CATEGORIES, isPastClearingDate, isUpcoming, paymentState } from "@/lib/cheques"
 import { fmt, sum } from "@/lib/format"
 
 /**
- * MVP: a cheque is a future payment, assumed to be paid on its expected clearing date. There is no bank-based
- * clearing or bounce detection yet. States: Scheduled (upcoming), Assumed paid (date passed), Cancelled, and Bounced —
- * a recorded outcome only (demo cheque #004468), never forecast and never shown as paid.
+ * A cheque is a future payment, forecast on its expected clearing date. There is no bank-based clearing or bounce
+ * detection yet, so a cheque is never marked paid: past its clearing date it stays Scheduled and is shown as
+ * "Past clearing date". Bounced exists only in the demonstration data.
  */
-type Show = "upcoming" | "paid" | "Cancelled" | "Bounced" | "all"
-const SHOW: [Show, string][] = [["upcoming", "Upcoming payments"], ["paid", "Assumed paid"], ["Cancelled", "Cancelled"], ["Bounced", "Bounced"], ["all", "All cheques"]]
-const paymentState = (c: Cheque) => (c.status !== "Scheduled" ? c.status : isAssumedPaid(c, TODAY) ? "Assumed paid" : "Scheduled")
+type Show = "upcoming" | "past" | "Cancelled" | "Bounced" | "all"
+const SHOW: [Show, string][] = [["upcoming", "Upcoming payments"], ["past", "Past clearing date"], ["Cancelled", "Cancelled"], ["Bounced", "Bounced"], ["all", "All cheques"]]
 
 export default function ChequesPage() {
-  const { cheques, kpis, allow } = useAppState()
+  const { cheques, kpis, allow, today, mode, forecastInfo } = useAppState()
+  const notReady = useNotReady(["cheques"])
   const [params, setParams] = useSearchParams()
   const [addOpen, setAddOpen] = useState(false)
   const [editing, setEditing] = useState<Cheque | null>(null)
@@ -49,10 +48,10 @@ export default function ChequesPage() {
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase()
     return cheques.filter((c) =>
-      (show === "all" || (show === "upcoming" ? isUpcoming(c, TODAY) : show === "paid" ? isAssumedPaid(c, TODAY) : c.status === show)) &&
+      (show === "all" || (show === "upcoming" ? isUpcoming(c, today) : show === "past" ? isPastClearingDate(c, today) : c.status === show)) &&
       (cat === "all" || c.category === cat) && (!from || c.expected_clear_date >= from) && (!to || c.expected_clear_date <= to) &&
       (!s || [c.cheque_no, c.payee, c.notes, fmt.amt(c.amount)].join(" ").toLowerCase().includes(s)))
-  }, [cheques, show, cat, q, from, to])
+  }, [cheques, show, cat, q, from, to, today])
 
   return (
     <>
@@ -65,15 +64,19 @@ export default function ChequesPage() {
         <Info />
         <AlertTitle>Forecast on the expected clearing date</AlertTitle>
         <AlertDescription>
-          Every scheduled cheque is assumed to be paid on its expected clearing date. The forecast deducts it on that date only;
-          after that date it counts as paid and is part of the Actual Bank Balance. Recording a cheque never changes the Actual Bank Balance.
+          The forecast deducts each scheduled cheque on its expected clearing date only. FlowLedger never marks a cheque paid: after that
+          date it stays Scheduled, shown as past its clearing date. Recording a cheque never changes the Actual Bank Balance.
         </AlertDescription>
       </Alert>
       <StatRow items={[
         { label: "Upcoming cheque payments", value: kpis.upcomingCount, sub: fmt.lkr0(kpis.upcomingAmount) },
         { label: "Clearing in the next 7 days", value: kpis.cheques7dCount, sub: fmt.lkr0(kpis.cheques7dAmount) },
-        { label: `Expected cheque outflows · ${FORECAST_WEEKS} weeks`, value: fmt.lkr0(kpis.forecastOutflow), sub: "Deducted on expected clearing dates" },
+        mode === "live"
+          ? { label: "Expected cheque outflows · forecast", value: fmt.lkr0(kpis.forecastOutflow), sub: forecastInfo ? `${fmt.date(forecastInfo.run.horizonStartDate)} – ${fmt.date(forecastInfo.run.horizonEndDate)}` : "No forecast yet" }
+          : { label: "Expected cheque outflows · 12 weeks", value: fmt.lkr0(kpis.forecastOutflow), sub: "Deducted on expected clearing dates" },
       ]} />
+      <DataState resources={["cheques"]} what="Cheque payments" />
+      {!notReady && (
       <Card>
         <CardHeader>
           <CardTitle>Cheques</CardTitle>
@@ -83,7 +86,7 @@ export default function ChequesPage() {
           <SearchInput value={q} onChange={setQ} placeholder="Search payee, cheque no. or note" />
           <Select value={show} onValueChange={(v) => setShow(v as Show)}>
             <SelectTrigger aria-label="Show" className="w-52"><SelectValue /></SelectTrigger>
-            <SelectContent>{SHOW.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+            <SelectContent>{SHOW.filter(([v]) => mode === "demo" || v !== "Bounced").map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
           </Select>
           <Select value={cat} onValueChange={setCat}>
             <SelectTrigger aria-label="Category" className="w-44"><SelectValue /></SelectTrigger>
@@ -103,7 +106,7 @@ export default function ChequesPage() {
           rowKey={(r) => r.cheque_no}
           defaultSort={{ key: "clears", dir: "asc" }}
           maxHeight={620}
-          empty="No cheques match these filters."
+          empty={cheques.length ? "No cheques match these filters." : "No cheque payments recorded yet."}
           footer={(rs) => <><span>{rs.length} cheques</span><span className="tabular">Total {fmt.lkr(sum(rs, (r) => r.amount))}</span></>}
           columns={[
             { key: "no", header: "Cheque no.", sortValue: (r) => r.cheque_no, cell: (r) => <span className="font-mono text-xs">{r.cheque_no}</span> },
@@ -113,12 +116,12 @@ export default function ChequesPage() {
             { key: "date", header: "Issue date", sortValue: (r) => r.cheque_date, cell: (r) => <span className="whitespace-nowrap">{fmt.short(r.cheque_date)}</span> },
             { key: "clears", header: "Expected clearing", sortValue: (r) => r.expected_clear_date, cell: (r) => <span className="whitespace-nowrap">{fmt.day(r.expected_clear_date)}</span> },
             {
-              key: "status", header: "Payment", sortValue: (r) => paymentState(r), cell: (r) => (
-                <CellStack main={<StatusBadge status={paymentState(r)} />} sub={isUpcoming(r, TODAY) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : undefined} />
+              key: "status", header: "Payment", sortValue: (r) => paymentState(r, today), cell: (r) => (
+                <CellStack main={<StatusBadge status={paymentState(r, today)} />} sub={isUpcoming(r, today) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : isPastClearingDate(r, today) ? "Not confirmed paid" : undefined} />
               ),
             },
             {
-              key: "act", header: "", cell: (r) => (canEdit && isUpcoming(r, TODAY) ? (
+              key: "act", header: "", cell: (r) => (canEdit && isUpcoming(r, today) ? (
                 <div className="flex gap-1.5">
                   <Button variant="outline" size="sm" onClick={() => setEditing(r)}>Edit</Button>
                   <Button variant="outline" size="sm" onClick={() => setCancelling(r)}>Cancel</Button>
@@ -128,9 +131,10 @@ export default function ChequesPage() {
           ]}
         />
       </Card>
-      <ChequeFormDialog open={addOpen} onOpenChange={setAddOpen} defaultDate={TODAY}
+      )}
+      <ChequeFormDialog open={addOpen} onOpenChange={setAddOpen} defaultDate={today}
         onSaved={(c) => toast.success(`Cheque ${c.cheque_no} added`, { description: `${fmt.lkr(c.amount)} · forecast on ${fmt.day(c.expected_clear_date)}` })} />
-      <ChequeFormDialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)} cheque={editing} defaultDate={TODAY}
+      <ChequeFormDialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)} cheque={editing} defaultDate={today}
         onSaved={(c) => toast.success(`Cheque ${c.cheque_no} updated`, { description: `Forecast on ${fmt.day(c.expected_clear_date)}` })} />
       <CancelChequeDialog cheque={cancelling} onClose={() => setCancelling(null)} onCancelled={(c) => toast(`Cheque ${c.cheque_no} cancelled`, { description: "Removed from the forecast" })} />
     </>

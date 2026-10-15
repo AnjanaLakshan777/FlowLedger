@@ -13,10 +13,13 @@ import { useAppState } from "@/components/app/app-state"
 import { homePage, ROLE_LABEL } from "@/lib/permissions"
 
 export default function LoginPage() {
-  const { actions, users } = useAppState()
+  const { actions, users, mode } = useAppState()
+  const demo = mode === "demo"
   const navigate = useNavigate()
-  const [email, setEmail] = useState("nadeesha@lotuslane.lk")
-  const [password, setPassword] = useState("flowledger-demo")
+  const [email, setEmail] = useState(demo ? "nadeesha@lotuslane.lk" : "")
+  const [password, setPassword] = useState(demo ? "flowledger-demo" : "")
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
   const [show, setShow] = useState(false)
   const [remember, setRemember] = useState(true)
   const [forgot, setForgot] = useState(false)
@@ -30,14 +33,18 @@ export default function LoginPage() {
     }
     setErrors(next)
     if (next.email || next.password) return
-    signInAs(email)
+    void signInAs(email)
   }
-  /** Mock authentication: any 8+ character password works; the email picks the demo user and therefore the role. */
-  const signInAs = (address: string) => {
-    const err = actions.signIn(address)
-    if (err) return setErrors({ email: err })
+  /** Live: the identity service checks the password. Demo: any 8+ character password works and the email picks the demo user. */
+  const signInAs = async (address: string) => {
+    setBusy(true)
+    setFailure(null)
+    const err = await actions.signIn(address, password, remember)
+    setBusy(false)
+    if (err) return demo ? setErrors({ email: err }) : setFailure(err)
+    // live: the home page follows the company role, which is known once the user is loaded
     const u = users.find((x) => x.email.toLowerCase() === address.trim().toLowerCase())
-    navigate(`/${homePage(u?.role) ?? ""}`)
+    navigate(demo ? `/${homePage(u?.role) ?? ""}` : "/")
   }
   const demoUsers = users.filter((u) => u.status === "Active")
 
@@ -75,6 +82,13 @@ export default function LoginPage() {
             <h1 className="text-[22px] font-semibold tracking-tight">Sign in</h1>
             <p className="text-muted-foreground text-sm">Use the email your company admin invited.</p>
           </div>
+          {failure && (
+            <Alert variant="destructive">
+              <Info />
+              <AlertTitle>Couldn't sign in</AlertTitle>
+              <AlertDescription>{failure}</AlertDescription>
+            </Alert>
+          )}
           {forgot && (
             <Alert variant="info">
               <Info />
@@ -102,20 +116,22 @@ export default function LoginPage() {
             <Checkbox id="remember" checked={remember} onCheckedChange={(v) => setRemember(v === true)} />
             <Label htmlFor="remember" className="font-normal">Keep me signed in on this device</Label>
           </div>
-          <Button type="submit" className="w-full">Sign in</Button>
+          <Button type="submit" className="w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
           <Separator />
           <p className="text-muted-foreground flex items-start justify-center gap-1.5 text-center text-xs">
             <ShieldCheck className="mt-px size-3.5 shrink-0" />
-            Mock authentication — no real accounts or passwords yet. The authentication service will replace this screen's logic.
+            {demo
+              ? "Demo mode — mock authentication with fictional accounts. Nothing is saved."
+              : "Sessions end after a short time. FlowLedger never stores your password in the browser."}
           </p>
-          <div className="grid gap-2" aria-label="Demo accounts">
+          {demo && <div className="grid gap-2" aria-label="Demo accounts">
             <p className="text-muted-foreground text-xs font-medium">Demo accounts (mock sign-in)</p>
             {demoUsers.map((u) => (
               <Button key={u.user_id} type="button" variant="outline" size="sm" className="justify-between" onClick={() => signInAs(u.email)}>
                 <span className="truncate">{u.name}</span><span className="text-muted-foreground text-xs">{ROLE_LABEL[u.role]}</span>
               </Button>
             ))}
-          </div>
+          </div>}
         </form>
       </div>
     </div>
