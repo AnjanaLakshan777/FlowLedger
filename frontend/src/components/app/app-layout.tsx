@@ -108,7 +108,8 @@ export function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const notifications = useNotifications()
-  const page = NAV_ITEMS.find((n) => location.pathname.startsWith(n.path))
+  // exact path or a sub-path: /forecast-vs-actual must not match /forecast
+  const page = NAV_ITEMS.find((n) => location.pathname === n.path || location.pathname.startsWith(n.path + "/"))
   const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor
   if (!currentUser) return null
   if (!role) return <NoCompanyAccess name={currentUser.name} onSignOut={() => { actions.signOut(); navigate("/login") }} />

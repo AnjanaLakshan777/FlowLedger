@@ -55,7 +55,7 @@ export default function ForecastPage() {
   if (live && (notReady || !run)) {
     return (
       <>
-        <PageHeader title="Cash-Flow Forecast" description="Expected cash position for the next 84 days, from the Actual Bank Balance the bank confirmed." actions={!notReady && updateButton} />
+        <PageHeader title="Cash-Flow Forecast" description="Expected cash position for the next 84 days, from the Actual Bank Balance the bank confirmed." />
         {notReady ? <DataState resources={["forecast", "cheques"]} what="The forecast" /> : (
           <Card className="items-center gap-3 px-4 py-12 text-center text-sm">
             No forecast has been made yet.

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAppState } from "@/components/app/app-state"
 import { CellStack, DataTable } from "@/components/app/data-table"
-import { DataState } from "@/components/app/data-state"
+import { DataState, useNotReady } from "@/components/app/data-state"
 import { KpiCard } from "@/components/app/kpi-card"
 import { PageHeader, SectionLabel } from "@/components/app/page-header"
 import { balanceLabel } from "@/components/app/forecast-balance"
@@ -25,11 +25,21 @@ export default function DashboardPage() {
   const live = mode === "live"
   const run = forecastInfo?.run
   const horizon = live ? "84 days" : `${FORECAST_WEEKS} weeks`
+  const notReady = useNotReady(["bank", "cheques", "forecast"])
   const balanceText = kpis.actualBalance == null ? "No confirmed bank balance yet." : `Actual Bank Balance ${fmt.lkr0(kpis.actualBalance)}.`
   const first = forecast.shortages[0]
   const shortDays = forecast.days.filter((d) => d.closing < 0).length
   const upcoming = cheques.filter((c) => isUpcoming(c, TODAY)).sort((a, b) => a.expected_clear_date.localeCompare(b.expected_clear_date)).slice(0, 7)
   const recent = transactions.slice(0, 7)
+
+  if (live && notReady) {
+    return (
+      <>
+        <PageHeader title="Dashboard" />
+        <DataState resources={["bank", "cheques", "forecast"]} what="Dashboard data" />
+      </>
+    )
+  }
 
   return (
     <>
@@ -56,7 +66,6 @@ export default function DashboardPage() {
         }
       />
 
-      <DataState resources={["bank", "cheques", "forecast"]} what="Some dashboard data" />
       {run?.balanceStale && (
         <Alert variant="destructive">
           <AlertTriangle />

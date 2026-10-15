@@ -22,6 +22,8 @@ const COMPANY_KEY = "flowledger.companyId"
 const IDLE: ResourceState = { loading: false, error: null }
 const LOADING: ResourceState = { loading: true, error: null }
 const EMPTY_FORECAST = { days: [], weeks: [], shortages: [] }
+// Until a resource's first answer arrives it counts as loading, never as empty.
+const NOT_LOADED: Record<Resource, ResourceState> = { sales: LOADING, bank: LOADING, cheques: LOADING, forecast: LOADING }
 
 interface BankData { account: BankAccount | null; transactions: BankTransaction[] }
 interface ForecastData { run: ForecastRun | null; runs: ForecastRunSummary[] }
@@ -33,7 +35,7 @@ function useLiveStateValue(): AppState {
   const [me, setMe] = useState<CurrentUser | null>(null)
   const [sessionLoading, setSessionLoading] = useState(() => !!session.token())
   const [companyId, setCompanyId] = useState<string | null>(storedCompany)
-  const [resources, setResources] = useState<Record<Resource, ResourceState>>({ sales: IDLE, bank: IDLE, cheques: IDLE, forecast: IDLE })
+  const [resources, setResources] = useState<Record<Resource, ResourceState>>(NOT_LOADED)
   const [sales, setSales] = useState<DailySale[]>([])
   const [bank, setBank] = useState<BankData>({ account: null, transactions: [] })
   const [cheques, setCheques] = useState<Cheque[]>([])
@@ -50,7 +52,7 @@ function useLiveStateValue(): AppState {
   const reset = useCallback(() => {
     generation.current++
     setMe(null); setSales([]); setBank({ account: null, transactions: [] }); setCheques([]); setForecastData({ run: null, runs: [] })
-    setResources({ sales: IDLE, bank: IDLE, cheques: IDLE, forecast: IDLE }); setOutdated(false)
+    setResources(NOT_LOADED); setOutdated(false)
   }, [])
 
   const signOut = useCallback(() => { session.clear(); reset(); setSessionLoading(false) }, [reset])
@@ -121,7 +123,10 @@ function useLiveStateValue(): AppState {
   const cid = company?.id ?? null
   useEffect(() => {
     if (!cid) return
-    for (const r of needed()) void load(r, cid)
+    const wanted = needed()
+    // a resource the role cannot see is never loaded, so it must not stay "loading"
+    setResources((r) => ({ ...r, ...Object.fromEntries((Object.keys(NOT_LOADED) as Resource[]).filter((x) => !wanted.includes(x)).map((x) => [x, IDLE])) }))
+    for (const r of wanted) void load(r, cid)
   }, [cid, needed, load])
 
   const reload = useCallback((r?: Resource) => {
@@ -178,6 +183,7 @@ function useLiveStateValue(): AppState {
         try { localStorage.setItem(COMPANY_KEY, id) } catch { /* not remembered */ }
         generation.current++
         setSales([]); setBank({ account: null, transactions: [] }); setCheques([]); setForecastData({ run: null, runs: [] }); setOutdated(false)
+        setResources(NOT_LOADED)
         setCompanyId(id)
       },
       saveSale: async (s) => {
