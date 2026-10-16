@@ -56,11 +56,21 @@ public class CompanyMembership {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    // The admin who added the user; null for self-registration.
+    @Column(name = "invited_by", updatable = false)
+    private UUID invitedBy;
+
     public CompanyMembership(Company company, User user, CompanyRole companyRole, MembershipStatus status) {
+        this(company, user, companyRole, status, null);
+    }
+
+    public CompanyMembership(Company company, User user, CompanyRole companyRole, MembershipStatus status,
+                             UUID invitedBy) {
         this.company = company;
         this.user = user;
         this.companyRole = companyRole;
         this.status = status;
+        this.invitedBy = invitedBy;
     }
 
     // Access needs the membership, the user's account and the company to be active.

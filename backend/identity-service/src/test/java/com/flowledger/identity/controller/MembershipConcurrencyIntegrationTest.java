@@ -56,6 +56,8 @@ class MembershipConcurrencyIntegrationTest {
     void deleteTestData() {
         List<UUID> users = jdbcTemplate.queryForList(
                 "SELECT user_id FROM company_memberships WHERE company_id = ?", UUID.class, companyId);
+        // Access changes refer to the users and the company, so they go first.
+        jdbcTemplate.update("DELETE FROM identity_audit_events WHERE company_id = ?", companyId);
         jdbcTemplate.update("DELETE FROM company_memberships WHERE company_id = ?", companyId);
         users.forEach(userId -> jdbcTemplate.update("DELETE FROM users WHERE id = ?", userId));
         jdbcTemplate.update("DELETE FROM companies WHERE id = ?", companyId);

@@ -9,8 +9,11 @@ import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CurrentTimestamp;
 import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SourceType;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
@@ -54,7 +57,8 @@ public class Company {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Generated
+    // Company details can be edited, so the timestamp is set by the database on every write.
+    @CurrentTimestamp(event = {EventType.INSERT, EventType.UPDATE}, source = SourceType.DB)
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -62,5 +66,10 @@ public class Company {
         this.name = name;
         this.registrationNumber = registrationNumber;
         this.status = status;
+    }
+
+    public void changeDetails(String name, String registrationNumber) {
+        this.name = name;
+        this.registrationNumber = registrationNumber;
     }
 }

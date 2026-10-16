@@ -349,6 +349,43 @@ confirmed before production.
   demoted or suspended (409); the company's active admins are locked during
   the change so concurrent requests cannot remove the last one.
 
+### Users & Settings
+
+Confirmed by the product owner on 2026-10-17. The same company
+administration as above (active `SYSTEM_ADMIN` in any company, or active
+`COMPANY_ADMIN` in their own) is required unless noted.
+
+- `POST /api/v1/identity/companies/{companyId}/memberships`
+  `{email, fullName, companyRole, temporaryPassword?}` → 201
+  `{membership, accountCreated}`. Any company role may be given. There is no
+  email delivery, so a new email gets an `ACTIVE` account with the admin's
+  temporary password (12 to 72 characters, BCrypt-hashed; 400 with a
+  `temporaryPassword` field error when missing), and the admin shares it
+  privately. An email that already has an account only gains the membership
+  and keeps its own name, password, and account status. The membership is
+  `ACTIVE`, with `invited_by` the admin. 409 when the user is already a
+  member.
+- "Deactivate" suspends the membership in this company only
+  (`PATCH .../memberships/{id}` with `SUSPENDED`); the account and other
+  companies are unaffected, and it can be reactivated.
+- `GET /api/v1/identity/companies/{companyId}` returns the company's details
+  to any user who can act through the company, or a `SYSTEM_ADMIN`.
+  `PATCH` the same path `{name, registrationNumber}` edits them; a blank
+  registration number clears it. Currency (LKR) and time zone
+  (Asia/Colombo) are fixed for the MVP and cannot be changed.
+- Access changes are written to `identity_audit_events` in the transaction of
+  the change, with the company (`company_id`, added by
+  `V9__add_company_to_identity_audit_events.sql`): `MEMBERSHIP_CREATED`,
+  `MEMBERSHIP_ROLE_CHANGED`, `MEMBERSHIP_STATUS_CHANGED` (only when the value
+  actually changes), and `COMPANY_UPDATED` (one event per changed field).
+  Details hold IDs and the old and new values, never passwords.
+  `GET .../companies/{companyId}/access-changes` lists the latest 200, newest
+  first, with the current names of the actor and the user.
+- The Users & Settings screen uses these APIs, and the bank-integration
+  service's bank account API for the Bank account tab (list, and set up the
+  company current account). Configuring an existing account is not
+  supported yet.
+
 ### SYSTEM_ADMIN Provisioning Procedure
 
 No API grants `SYSTEM_ADMIN`. An operator with direct access to the identity
@@ -372,14 +409,15 @@ database provisions it, and records who did it and when:
   is activated directly in the database.
 - User self-registration remains public. There is no self-service tenant
   onboarding: new companies are created by a `SYSTEM_ADMIN`.
-- Companies can be created but not yet updated, suspended, or closed through
-  the API.
+- Companies can be created and their name and registration number edited,
+  but not yet suspended or closed through the API.
 - There are no refresh tokens or token revocation. An access token stays
   valid until it expires.
 - Login has no rate limiting or lockout after failed attempts.
-- Company creation, user registration, login, and membership or role changes
-  do not yet write to `identity_audit_events`. Auditing these actions,
-  especially administrative changes, remains outstanding.
+- Membership and company changes are audited (Users & Settings above);
+  company creation, self-registration, and login are not yet.
+  `identity_audit_events` has no append-only trigger, unlike the other
+  services' audit tables.
 
 ## 7. Provisional Bank Integration Rules
 
@@ -1623,8 +1661,8 @@ The following must be researched or agreed before implementation:
   user signs in again after the access token expires.
 - Whether daily sales may be corrected, whether they carry a note, and
   whether other users may see who recorded them (the API has no name).
-- APIs for inviting or creating users, company settings, and listing
-  companies for a platform administrator.
+- An API listing companies for a platform administrator, and invitation by
+  email (users are created with a temporary password for now).
 - Historical sales import: whether an import's invalid rows may be left out
   at approval (currently yes, explicitly) or must be fixed; whether
   Accountants should see all imports of the company (currently only their

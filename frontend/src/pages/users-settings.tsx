@@ -15,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAppState } from "@/components/app/app-state"
-import { NotConnected } from "@/components/app/not-connected"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { Field } from "@/components/app/field"
 import { PageHeader } from "@/components/app/page-header"
@@ -27,11 +26,12 @@ import type { AccessChange, Role, Setting, User } from "@/data/types"
 import { requiresBackend } from "@/lib/demo"
 import { fmt, initials } from "@/lib/format"
 import { can, deactivateError, PERMISSION_LABEL, ROLE_DESCRIPTION, ROLE_LABEL, ROLES, roleChangeError } from "@/lib/permissions"
+import LiveUsersSettingsPage from "./users-settings-live"
 
-/** Live data: no backend API yet, so no demonstration data is shown as company data. */
+/** Live data comes from identity-service and bank-integration-service; the demonstration screen is used in demo mode and tests. */
 export default function UsersSettingsPage() {
   const { mode } = useAppState()
-  return mode === "live" ? <NotConnected title="Users & Settings" needs={["Inviting or creating company users (identity-service; only self-registration exists)","Company settings and bank account configuration screens (the bank account API exists; this screen is not connected to it yet)","Access-change history (identity audit events are deferred)"]} /> : <DemoUsersSettingsPage />
+  return mode === "live" ? <LiveUsersSettingsPage /> : <DemoUsersSettingsPage />
 }
 
 /** The designed screen with the demonstration data (demo mode and frontend tests). */

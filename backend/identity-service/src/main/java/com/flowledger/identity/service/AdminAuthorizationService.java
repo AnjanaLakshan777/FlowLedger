@@ -43,6 +43,19 @@ public class AdminAuthorizationService {
         }
     }
 
+    // Reading company details: a system admin, or anyone who can act through the company.
+    public void requireCompanyAccess(UUID userId, UUID companyId) {
+        if (isActivePlatformAdmin(userId)) {
+            return;
+        }
+        boolean member = membershipRepository.findWithUserAndCompany(companyId, userId)
+                .filter(CompanyMembership::grantsCompanyAccess)
+                .isPresent();
+        if (!member) {
+            throw new OperationNotPermittedException("You are not a member of this company.");
+        }
+    }
+
     public boolean isActivePlatformAdmin(UUID userId) {
         return userRepository.findById(userId)
                 .filter(User::isActivePlatformAdmin)

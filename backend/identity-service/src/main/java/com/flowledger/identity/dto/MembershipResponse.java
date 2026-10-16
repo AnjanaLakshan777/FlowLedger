@@ -5,6 +5,7 @@ import com.flowledger.identity.entity.CompanyMembership;
 import com.flowledger.identity.entity.CompanyRole;
 import com.flowledger.identity.entity.MembershipStatus;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public record MembershipResponse(
@@ -15,7 +16,8 @@ public record MembershipResponse(
         String fullName,
         CompanyRole companyRole,
         MembershipStatus status,
-        AccountStatus accountStatus
+        AccountStatus accountStatus,
+        Instant createdAt
 ) {
 
     public static MembershipResponse from(CompanyMembership membership) {
@@ -27,7 +29,8 @@ public record MembershipResponse(
                 membership.getUser().getFullName(),
                 membership.getCompanyRole(),
                 membership.getStatus(),
-                membership.getUser().getAccountStatus()
+                membership.getUser().getAccountStatus(),
+                membership.getCreatedAt()
         );
     }
 }
