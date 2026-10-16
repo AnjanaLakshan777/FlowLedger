@@ -396,20 +396,28 @@ class SalesImportIntegrationTest {
     }
 
     @Test
-    void shouldLetCompanyAdminsOnlyInspect() throws Exception {
+    void shouldLetCompanyAdminsInspectAndDecideButNotUpload() throws Exception {
         identityService.grant(companyId, "ACCOUNTANT");
-        String id = id(upload(accountant, "own.csv", csv("2025-02-01,1,1"))
+        String toApprove = id(upload(accountant, "a.csv", csv("2025-02-01,1,1"))
+                .andReturn().getResponse().getContentAsString());
+        String toReject = id(upload(accountant, "b.csv", csv("2025-02-02,1,1"))
                 .andReturn().getResponse().getContentAsString());
         identityService.grant(companyId, "COMPANY_ADMIN");
         UUID admin = UUID.randomUUID();
 
         mockMvc.perform(get(importsUrl(companyId)).with(user(admin)))
                 .andExpect(jsonPath("$.canUpload").value(false))
-                .andExpect(jsonPath("$.canApprove").value(false))
-                .andExpect(jsonPath("$.imports", hasSize(1)));
-        read(admin, id).andExpect(status().isOk());
-        upload(admin, "b.csv", csv("2025-03-01,1,1")).andExpect(status().isForbidden());
-        approve(admin, id, 1, false).andExpect(status().isForbidden());
+                .andExpect(jsonPath("$.canApprove").value(true))
+                .andExpect(jsonPath("$.imports", hasSize(2)));
+        upload(admin, "c.csv", csv("2025-03-01,1,1")).andExpect(status().isForbidden());
+
+        approve(admin, toApprove, 1, false).andExpect(status().isOk())
+                .andExpect(jsonPath("$.batch.status").value("APPROVED"))
+                .andExpect(jsonPath("$.batch.approvedBy").value(admin.toString()));
+        reject(admin, toReject, 1, "Wrong period").andExpect(status().isOk())
+                .andExpect(jsonPath("$.batch.status").value("REJECTED"))
+                .andExpect(jsonPath("$.batch.rejectedBy").value(admin.toString()));
+        assertThat(count("SELECT count(*) FROM daily_sales WHERE company_id = ?")).isEqualTo(1);
     }
 
     @Test

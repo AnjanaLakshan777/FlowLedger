@@ -71,7 +71,7 @@ payroll system, or payment-execution platform.
 - Record daily cash and card sales with a distinct sale date.
 - Upload historical sales using a validated UTF-8 CSV template.
 - Preview validation results and duplicate-date issues before approval.
-- Require Finance Controller approval before historical imports become eligible for forecasting.
+- Require Finance Controller or Company Admin approval before historical imports become eligible for forecasting.
 - Track import status and audit events.
 - Keep sales records separate from bank-confirmed actual inflows.
 
@@ -277,7 +277,7 @@ authorization.
 | `CASHIER` | Enter and view permitted daily sales information. |
 | `ACCOUNTANT` | View business information, upload historical sales, and access permitted forecast and bank views. |
 | `FINANCE_CONTROLLER` | Review and approve historical imports, manage cheques, and use financial forecasting workflows. |
-| `COMPANY_ADMIN` | Administer company-level access and permitted company configuration. |
+| `COMPANY_ADMIN` | Administer company-level access and permitted company configuration, and approve historical imports. |
 | `SYSTEM_ADMIN` | Administer platform-level users, roles, and system configuration, subject to business-data membership boundaries. |
 
 Exact permissions are defined by backend authorization rules and may vary by endpoint. Always refer to
@@ -444,8 +444,8 @@ skipped tests separately from passed tests.
 - The forecast horizon is **84 days (12 weeks)**.
 - A projected closing balance below **LKR 0** indicates a cash shortage.
 - Only bank-confirmed, explicitly classified transactions contribute to actual inflows and outflows.
-- Historical sales imports require Finance Controller approval before they are eligible for
-  forecasting.
+- Historical sales imports require Finance Controller or Company Admin approval before they are
+  eligible for forecasting.
 - A sale date and its bank receipt/deposit date are separate concepts.
 - Approved sales history may inform the forecast pattern, but it never becomes an actual bank inflow
   by itself.

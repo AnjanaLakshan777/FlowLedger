@@ -181,7 +181,8 @@ Confirmed by the product owner on 2026-10-15:
 
 ### Historical Sales Import
 
-- Historical sales imports require Finance Controller approval.
+- Historical sales imports require Finance Controller or Company Admin
+  approval.
 - Duplicate dates block approval.
 - Approved historical sales data must feed the forecast.
 
@@ -194,8 +195,9 @@ Confirmed by the product owner with the import feature (2026-10-15):
   dates are invalid. Duplicate dates within an import block approval until
   resolved.
 - Accountants may upload and inspect their imports but not approve them.
-  Finance Controllers may upload, inspect, approve, and reject. Cashiers have
-  no access. The backend enforces roles and company isolation.
+  Finance Controllers may upload, inspect, approve, and reject. Company Admins
+  may inspect, approve, and reject, but not upload (confirmed by the product
+  owner on 2026-10-16). Cashiers have no access. The backend enforces roles and company isolation.
 - The uploader, upload time, approver or rejecter, decision time, and an
   audit history are recorded.
 - Historical sales are sales records, not bank inflows: the sale date is not
@@ -663,7 +665,7 @@ marked provisional are implementation decisions to review.
   company (409, with the existing import's ID); a unique partial index makes
   this hold for concurrent uploads too. After rejection, or if invalid, it can
   be uploaded again.
-- Approval (Finance Controller only): one transaction takes a per-company
+- Approval (Finance Controller or Company Admin): one transaction takes a per-company
   advisory lock (serialising imports of the company), locks the batch, checks
   it is still `PENDING_APPROVAL` at the version the approver reviewed
   (otherwise 409), rechecks every valid date against recorded sales
@@ -682,7 +684,7 @@ marked provisional are implementation decisions to review.
   some sales); they remain valid rows of the approved import and block a
   later import of the same date. A later manual entry for such a date is not
   blocked (provisional).
-- Rejection (Finance Controller only) needs a reason (at most 500
+- Rejection (Finance Controller or Company Admin) needs a reason (at most 500
   characters) and the reviewed version; it records who and when.
 - Audit actions `SALES_IMPORT_UPLOADED`, `SALES_IMPORT_APPROVED` (with the
   note as reason and the counts), `SALES_IMPORT_REJECTED` (with the
@@ -692,8 +694,8 @@ marked provisional are implementation decisions to review.
 - Roles (enforced through identity-service's membership check, before any
   database work): `ACCOUNTANT` uploads and sees only the imports they
   uploaded (another import is 404); `FINANCE_CONTROLLER` uploads, sees all,
-  approves, and rejects; `COMPANY_ADMIN` sees all but cannot upload or decide
-  (provisional: not covered by the confirmed rules); `CASHIER` and users
+  approves, and rejects; `COMPANY_ADMIN` sees all, approves, and rejects, but
+  cannot upload; `CASHIER` and users
   without membership get 403. The list response says what the user may do
   (`canUpload`, `canApprove`, `ownImportsOnly`), and the screen shows only
   those actions. An import of another company is not found.
@@ -1407,7 +1409,7 @@ retry; the frontend never falls back to demonstration data.
   first by default), because the baseline-run rule is open.
 - Historical Sales Import is live: template download, CSV upload with the
   server's validation results, issues and all-rows preview, import history,
-  and approval or rejection for Finance Controllers. Actions follow the
+  and approval or rejection for Finance Controllers and Company Admins. Actions follow the
   server's `canUpload`/`canApprove`, not only the role mapping. Imported
   daily sales show as "Historical import" on Daily Sales, not as backdated
   entries. Users' names are not available; the screen shows "You" or
@@ -1626,8 +1628,7 @@ The following must be researched or agreed before implementation:
 - Historical sales import: whether an import's invalid rows may be left out
   at approval (currently yes, explicitly) or must be fixed; whether
   Accountants should see all imports of the company (currently only their
-  own); whether a Company Admin may upload or approve (currently inspect
-  only); whether the uploader may approve their own import (currently
+  own); whether a Company Admin may upload (currently not); whether the uploader may approve their own import (currently
   allowed for a Finance Controller); XLSX support; how an approved import is
   corrected or reversed; whether a manual daily sale may later be entered for
   a day an approved import recorded as zero; and how users' names reach the

@@ -54,12 +54,13 @@ import java.util.stream.Collectors;
 public class SalesImportService {
 
     // Confirmed: Accountants upload and inspect; Finance Controllers also approve and reject;
-    // Cashiers have no access. Company Admins may inspect (provisional, docs/decisions.md).
+    // Company Admins inspect, approve and reject but do not upload; Cashiers have no access.
     private static final Set<CompanyRole> VIEW_ROLES =
             EnumSet.of(CompanyRole.ACCOUNTANT, CompanyRole.FINANCE_CONTROLLER, CompanyRole.COMPANY_ADMIN);
     private static final Set<CompanyRole> UPLOAD_ROLES =
             EnumSet.of(CompanyRole.ACCOUNTANT, CompanyRole.FINANCE_CONTROLLER);
-    private static final Set<CompanyRole> DECIDE_ROLES = EnumSet.of(CompanyRole.FINANCE_CONTROLLER);
+    private static final Set<CompanyRole> DECIDE_ROLES =
+            EnumSet.of(CompanyRole.FINANCE_CONTROLLER, CompanyRole.COMPANY_ADMIN);
 
     private static final String ENTITY_TYPE = "SALES_IMPORT_BATCH";
     private static final int MAX_LISTED_DATES = 50;
