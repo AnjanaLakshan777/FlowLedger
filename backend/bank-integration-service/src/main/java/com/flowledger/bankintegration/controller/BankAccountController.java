@@ -2,13 +2,16 @@ package com.flowledger.bankintegration.controller;
 
 import com.flowledger.bankintegration.dto.BankAccountResponse;
 import com.flowledger.bankintegration.dto.CreateBankAccountRequest;
+import com.flowledger.bankintegration.dto.UpdateBankAccountRequest;
 import com.flowledger.bankintegration.service.BankAccountService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -45,5 +48,22 @@ public class BankAccountController {
                                               @PathVariable UUID companyId,
                                               @PathVariable UUID accountId) {
         return bankAccountService.getBankAccount(user, companyId, accountId);
+    }
+
+    @PatchMapping("/{accountId}")
+    public BankAccountResponse updateBankAccount(@AuthenticationPrincipal Jwt user,
+                                                 @PathVariable UUID companyId,
+                                                 @PathVariable UUID accountId,
+                                                 @Valid @RequestBody UpdateBankAccountRequest request) {
+        return bankAccountService.updateBankAccount(user, companyId, accountId, request);
+    }
+
+    // Deactivates the account; its statements, transactions and history are kept.
+    @DeleteMapping("/{accountId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deactivateBankAccount(@AuthenticationPrincipal Jwt user,
+                                      @PathVariable UUID companyId,
+                                      @PathVariable UUID accountId) {
+        bankAccountService.deactivateBankAccount(user, companyId, accountId);
     }
 }

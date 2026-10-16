@@ -382,9 +382,21 @@ administration as above (active `SYSTEM_ADMIN` in any company, or active
   `GET .../companies/{companyId}/access-changes` lists the latest 200, newest
   first, with the current names of the actor and the user.
 - The Users & Settings screen uses these APIs, and the bank-integration
-  service's bank account API for the Bank account tab (list, and set up the
-  company current account). Configuring an existing account is not
-  supported yet.
+  service's bank account API for the Bank account tab: list, set up, edit,
+  and delete the company current account.
+- Bank account changes (`COMPANY_ADMIN`, or a `SYSTEM_ADMIN` in any company;
+  confirmed by the product owner on 2026-10-17):
+  `PATCH .../bank-accounts/{accountId}`
+  `{bankName, accountName, accountNumberLast4?, integrationMode}` edits an
+  active account; the account type and currency do not change. `DELETE` the
+  same path (204) deactivates it instead of removing it: statements,
+  transactions, balances, and audit history are kept, and payment-service
+  cheques and saved forecasts still refer to it. Payment and forecast use
+  only the active current account, so cheques cannot be added and no
+  forecast can be made until a new one is set up. An inactive account
+  cannot be changed (409). Both write `BANK_ACCOUNT_UPDATED` or
+  `BANK_ACCOUNT_DEACTIVATED` to `bank_integration_audit_events`, with the
+  details before and after; an edit that changes nothing writes nothing.
 
 ### SYSTEM_ADMIN Provisioning Procedure
 

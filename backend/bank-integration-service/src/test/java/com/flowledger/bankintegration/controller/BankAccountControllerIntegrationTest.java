@@ -31,7 +31,9 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -244,6 +246,119 @@ class BankAccountControllerIntegrationTest {
 
         assertThat(countAccounts(companyId)).isZero();
         assertThat(identityService.lastAuthorization()).isNull();
+    }
+
+    // Editing and deactivating
+
+    @Test
+    void shouldEditTheDetailsOfAnActiveAccountAndAuditTheChange() throws Exception {
+        UUID id = insertAccount(companyId, "ACTIVE");
+        Map<String, Object> overrides = new LinkedHashMap<>();
+        overrides.put("bankName", " Bank of Ceylon ");
+        overrides.put("accountNumberLast4", null);
+        overrides.put("integrationMode", "STATEMENT_IMPORT");
+
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + id))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(overrides)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bankName").value("Bank of Ceylon"))
+                .andExpect(jsonPath("$.accountNumberLast4").doesNotExist())
+                .andExpect(jsonPath("$.integrationMode").value("STATEMENT_IMPORT"))
+                .andExpect(jsonPath("$.accountType").value("CURRENT"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+
+        Map<String, Object> audit = jdbcTemplate.queryForMap(
+                "SELECT action, actor_user_id, before_data::text AS before, after_data::text AS after "
+                        + "FROM bank_integration_audit_events WHERE entity_id = ?", id);
+        assertThat(audit.get("action")).isEqualTo("BANK_ACCOUNT_UPDATED");
+        assertThat(audit.get("actor_user_id")).isEqualTo(userId);
+        assertThat((String) audit.get("before")).contains("Sampath Bank", "0042");
+        assertThat((String) audit.get("after")).contains("Bank of Ceylon");
+
+        // The same details again change nothing and record nothing.
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + id))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(overrides)))
+                .andExpect(status().isOk());
+        assertThat(auditCount(id)).isEqualTo(1);
+    }
+
+    @Test
+    void shouldRejectInvalidEdits() throws Exception {
+        UUID id = insertAccount(companyId, "ACTIVE");
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + id))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(Map.of("accountNumberLast4", "12a4"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.accountNumberLast4").value("accountNumberLast4 must be exactly 4 digits"));
+    }
+
+    @Test
+    void shouldDeactivateAnAccountKeepingItAndAllowANewCurrentAccount() throws Exception {
+        UUID id = insertAccount(companyId, "ACTIVE");
+
+        mockMvc.perform(authenticated(delete(accountsUrl(companyId) + "/" + id)))
+                .andExpect(status().isNoContent());
+
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM bank_accounts WHERE id = ?", String.class, id))
+                .isEqualTo("INACTIVE");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT action FROM bank_integration_audit_events WHERE entity_id = ?", String.class, id))
+                .isEqualTo("BANK_ACCOUNT_DEACTIVATED");
+        mockMvc.perform(authenticated(post(accountsUrl(companyId)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(Map.of())))
+                .andExpect(status().isCreated());
+        assertThat(countAccounts(companyId)).isEqualTo(2);
+    }
+
+    @Test
+    void shouldNotChangeAnInactiveAccount() throws Exception {
+        UUID id = insertAccount(companyId, "INACTIVE");
+
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + id))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(Map.of())))
+                .andExpect(status().isConflict());
+        mockMvc.perform(authenticated(delete(accountsUrl(companyId) + "/" + id)))
+                .andExpect(status().isConflict());
+        assertThat(auditCount(id)).isZero();
+    }
+
+    @Test
+    void shouldNotChangeAnotherCompanysAccount() throws Exception {
+        UUID foreign = insertAccount(otherCompanyId, "ACTIVE");
+
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + foreign))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(Map.of())))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(authenticated(delete(accountsUrl(companyId) + "/" + foreign)))
+                .andExpect(status().isNotFound());
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM bank_accounts WHERE id = ?", String.class, foreign))
+                .isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void shouldLetOnlyCompanyAdminsEditOrDeactivate() throws Exception {
+        UUID id = insertAccount(companyId, "ACTIVE");
+        identityService.reset();
+        identityService.grant(companyId, "FINANCE_CONTROLLER");
+
+        mockMvc.perform(authenticated(patch(accountsUrl(companyId) + "/" + id))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson(Map.of())))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(authenticated(delete(accountsUrl(companyId) + "/" + id)))
+                .andExpect(status().isForbidden());
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM bank_accounts WHERE id = ?", String.class, id))
+                .isEqualTo("ACTIVE");
+    }
+
+    private int auditCount(UUID accountId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM bank_integration_audit_events WHERE entity_id = ?", Integer.class, accountId);
     }
 
     private MockHttpServletRequestBuilder authenticated(MockHttpServletRequestBuilder request) {

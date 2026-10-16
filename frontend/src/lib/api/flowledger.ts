@@ -180,6 +180,10 @@ export const flowledger = {
   bankAccounts: (c: string) => api<ApiBankAccount[]>(`${bank(c)}/bank-accounts`),
   createBankAccount: (c: string, body: CreateBankAccountRequest) =>
     api<ApiBankAccount>(`${bank(c)}/bank-accounts`, { method: "POST", json: body }),
+  updateBankAccount: (c: string, id: string, body: Omit<CreateBankAccountRequest, "accountType">) =>
+    api<ApiBankAccount>(`${bank(c)}/bank-accounts/${id}`, { method: "PATCH", json: body }),
+  /** Deactivates the account; its statements, transactions and history are kept. */
+  deactivateBankAccount: (c: string, id: string) => api<null>(`${bank(c)}/bank-accounts/${id}`, { method: "DELETE" }),
   latestBalance: (c: string, accountId: string) => api<ApiBalance>(`${bank(c)}/bank-accounts/${accountId}/balance-snapshots/latest`),
   statementImports: (c: string) => api<ApiStatementImport[]>(`${bank(c)}/statement-imports`),
   transactions: (c: string, accountId: string) => api<ApiTransaction[]>(`${bank(c)}/bank-transactions?bankAccountId=${accountId}`),

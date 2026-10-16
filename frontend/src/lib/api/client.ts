@@ -58,7 +58,7 @@ export const session = {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH"
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
   json?: unknown
   form?: FormData
   signal?: AbortSignal

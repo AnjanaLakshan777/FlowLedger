@@ -7,9 +7,10 @@ import org.springframework.web.ErrorResponseException;
 public class BankAccountNotActiveException extends ErrorResponseException {
 
     public BankAccountNotActiveException() {
-        super(HttpStatus.CONFLICT,
-                ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
-                        "Statements can only be imported into an active current account."),
-                null);
+        this("Statements can only be imported into an active current account.");
+    }
+
+    public BankAccountNotActiveException(String detail) {
+        super(HttpStatus.CONFLICT, ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, detail), null);
     }
 }

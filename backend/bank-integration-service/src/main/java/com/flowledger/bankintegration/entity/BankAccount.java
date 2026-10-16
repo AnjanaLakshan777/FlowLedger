@@ -9,11 +9,16 @@ import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CurrentTimestamp;
 import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SourceType;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -65,7 +70,8 @@ public class BankAccount {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Generated
+    // Details can be edited and the account deactivated, so the database sets this on every write.
+    @CurrentTimestamp(event = {EventType.INSERT, EventType.UPDATE}, source = SourceType.DB)
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -78,5 +84,35 @@ public class BankAccount {
         this.accountNumberLast4 = accountNumberLast4;
         this.integrationMode = integrationMode;
         this.status = status;
+    }
+
+    public boolean isActive() {
+        return status == BankAccountStatus.ACTIVE;
+    }
+
+    // Returns whether anything changed.
+    public boolean changeDetails(String bankName, String accountName, String accountNumberLast4,
+                                 IntegrationMode integrationMode) {
+        Map<String, Object> before = detailsSnapshot();
+        this.bankName = bankName;
+        this.accountName = accountName;
+        this.accountNumberLast4 = accountNumberLast4;
+        this.integrationMode = integrationMode;
+        return !before.equals(detailsSnapshot());
+    }
+
+    public void deactivate() {
+        this.status = BankAccountStatus.INACTIVE;
+    }
+
+    // For audit history: the editable details and the status, never a full account number.
+    public Map<String, Object> detailsSnapshot() {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("bankName", bankName);
+        snapshot.put("accountName", accountName);
+        snapshot.put("accountNumberLast4", accountNumberLast4);
+        snapshot.put("integrationMode", integrationMode.name());
+        snapshot.put("status", status.name());
+        return snapshot;
     }
 }

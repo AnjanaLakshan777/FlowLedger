@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { useSearchParams } from "react-router-dom"
-import { Check, Lock, MoreHorizontal, Pencil, Plus, RefreshCw } from "lucide-react"
+import { Check, Lock, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -77,6 +77,7 @@ export default function LiveUsersSettingsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [bankOpen, setBankOpen] = useState(false)
+  const [removeOpen, setRemoveOpen] = useState(false)
   const isAdmin = allow("users.manage")
 
   const load = useCallback(<T,>(fetch: () => Promise<T>, set: (d: Data<T>) => void) => {
@@ -276,6 +277,12 @@ export default function LiveUsersSettingsPage() {
               <CardHeader>
                 <CardTitle>Company current account</CardTitle>
                 <CardDescription>The MVP supports one company current account. FlowLedger only reads its balance and transactions — it never makes payments.</CardDescription>
+                {account && isAdmin && (
+                  <CardAction className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setBankOpen(true)}><Pencil />Edit</Button>
+                    <Button size="sm" variant="outline" className="text-destructive" onClick={() => setRemoveOpen(true)}><Trash2 />Delete</Button>
+                  </CardAction>
+                )}
               </CardHeader>
               <CardContent>
                 {account ? (
@@ -331,7 +338,8 @@ export default function LiveUsersSettingsPage() {
         <>
           <CreateUserDialog companyId={cid} open={createOpen} onOpenChange={setCreateOpen} onCreated={() => { loadMembers(); loadChanges() }} />
           {details.value && <EditCompanyDialog company={details.value} open={editOpen} onOpenChange={setEditOpen} onSaved={(c) => { setDetails({ value: c, error: null }); loadChanges() }} />}
-          <BankAccountDialog companyId={cid} open={bankOpen} onOpenChange={setBankOpen} onCreated={() => { loadAccounts(); reload("bank") }} />
+          <BankAccountDialog companyId={cid} account={account} open={bankOpen} onOpenChange={setBankOpen} onSaved={() => { loadAccounts(); reload("bank") }} />
+          {account && <RemoveAccountDialog companyId={cid} account={account} open={removeOpen} onOpenChange={setRemoveOpen} onRemoved={() => { loadAccounts(); reload("bank") }} />}
         </>
       )}
     </>
@@ -446,26 +454,37 @@ function EditCompanyDialog({ company, open, onOpenChange, onSaved }: {
   )
 }
 
-function BankAccountDialog({ companyId, open, onOpenChange, onCreated }: {
-  companyId: string; open: boolean; onOpenChange: (o: boolean) => void; onCreated: () => void
+/** Sets up the company current account, or edits the active one when `account` is given. */
+function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: {
+  companyId: string; account: ApiBankAccount | null; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void
 }) {
   const [bankName, setBankName] = useState("")
   const [accountName, setAccountName] = useState("")
   const [last4, setLast4] = useState("")
-  const [mode, setMode] = useState<IntegrationMode>("STATEMENT_IMPORT")
+  const [mode, setMode] = useState<string>("STATEMENT_IMPORT")
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
-  const reset = () => { setBankName(""); setAccountName(""); setLast4(""); setMode("STATEMENT_IMPORT"); setErrors({}) }
+  useEffect(() => {
+    if (!open) return
+    setBankName(account?.bankName ?? ""); setAccountName(account?.accountName ?? "")
+    setLast4(account?.accountNumberLast4 ?? ""); setMode(account?.integrationMode ?? "STATEMENT_IMPORT"); setErrors({})
+  }, [open, account])
+  // An account made with another connection keeps it unless the admin picks one of these.
+  const modes = [...new Set(["STATEMENT_IMPORT", "MANUAL", mode])]
 
   async function submit() {
     if (last4 && !/^\d{4}$/.test(last4)) return setErrors({ accountNumberLast4: "Enter exactly the last 4 digits." })
     setBusy(true)
+    const body = { bankName: bankName.trim(), accountName: accountName.trim(), accountNumberLast4: last4 || null, integrationMode: mode as IntegrationMode }
     try {
-      await flowledger.createBankAccount(companyId, {
-        bankName: bankName.trim(), accountName: accountName.trim(), accountType: "CURRENT", accountNumberLast4: last4 || null, integrationMode: mode,
-      })
-      toast.success("Current account set up")
-      onOpenChange(false); reset(); onCreated()
+      if (account) {
+        await flowledger.updateBankAccount(companyId, account.id, body)
+        toast.success("Bank account details saved")
+      } else {
+        await flowledger.createBankAccount(companyId, { ...body, accountType: "CURRENT" })
+        toast.success("Current account set up")
+      }
+      onOpenChange(false); onSaved()
     } catch (e) {
       setErrors(fieldErrors(e, "bankName"))
     } finally {
@@ -474,26 +493,65 @@ function BankAccountDialog({ companyId, open, onOpenChange, onCreated }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset() }}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Set up current account</DialogTitle><DialogDescription>Only the last four digits of the account number are stored.</DialogDescription></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>{account ? "Edit current account" : "Set up current account"}</DialogTitle>
+          <DialogDescription>Only the last four digits of the account number are stored.</DialogDescription>
+        </DialogHeader>
         <Field label="Bank" htmlFor="bank-name" error={errors.bankName}><Input id="bank-name" placeholder="e.g. Commercial Bank" value={bankName} onChange={(e) => setBankName(e.target.value)} /></Field>
         <Field label="Account name" htmlFor="bank-account" error={errors.accountName}><Input id="bank-account" value={accountName} onChange={(e) => setAccountName(e.target.value)} /></Field>
         <Field label="Last 4 digits of the account number" htmlFor="bank-last4" error={errors.accountNumberLast4} help="Optional">
           <Input id="bank-last4" inputMode="numeric" maxLength={4} className="font-mono" value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, ""))} />
         </Field>
         <Field label="Connection" error={errors.integrationMode}>
-          <Select value={mode} onValueChange={(v) => setMode(v as IntegrationMode)}>
+          <Select value={mode} onValueChange={setMode}>
             <SelectTrigger className="w-full" aria-label="Connection"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="STATEMENT_IMPORT">{MODE_LABEL.STATEMENT_IMPORT}</SelectItem>
-              <SelectItem value="MANUAL">{MODE_LABEL.MANUAL}</SelectItem>
-            </SelectContent>
+            <SelectContent>{modes.map((m) => <SelectItem key={m} value={m}>{MODE_LABEL[m] ?? m}</SelectItem>)}</SelectContent>
           </Select>
         </Field>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={busy || !bankName.trim() || !accountName.trim()} onClick={submit}>Set up account</Button>
+          <Button disabled={busy || !bankName.trim() || !accountName.trim()} onClick={submit}>{account ? "Save changes" : "Set up account"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Deleting deactivates the account: its statements, transactions and history are kept. */
+function RemoveAccountDialog({ companyId, account, open, onOpenChange, onRemoved }: {
+  companyId: string; account: ApiBankAccount; open: boolean; onOpenChange: (o: boolean) => void; onRemoved: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  async function remove() {
+    setBusy(true)
+    try {
+      await flowledger.deactivateBankAccount(companyId, account.id)
+      toast("Bank account deleted", { description: "Its statements and transactions are kept as history." })
+      onOpenChange(false); onRemoved()
+    } catch (e) {
+      toast.error("The account was not deleted", { description: errorMessage(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete {account.bankName} current account?</DialogTitle>
+          <DialogDescription>
+            The account is deactivated and no longer used. Its imported statements, transactions and history are kept,
+            and saved forecasts and cheques still refer to it. Until a new current account is set up, statements can't be
+            imported, cheques can't be added and no new forecast can be made.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="destructive" disabled={busy} onClick={remove}>Delete account</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
