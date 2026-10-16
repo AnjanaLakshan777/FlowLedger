@@ -53,6 +53,7 @@ public class BankAccountService {
         BankAccount account = new BankAccount(
                 companyId,
                 request.bankName().trim(),
+                request.branchName().trim(),
                 request.accountName().trim(),
                 request.accountType(),
                 request.accountNumberLast4(),
@@ -84,7 +85,7 @@ public class BankAccountService {
         BankAccount account = activeAccount(companyId, accountId);
 
         Map<String, Object> before = account.detailsSnapshot();
-        if (account.changeDetails(request.bankName().trim(), request.accountName().trim(),
+        if (account.changeDetails(request.bankName().trim(), request.branchName().trim(), request.accountName().trim(),
                 request.accountNumberLast4(), request.integrationMode())) {
             account = bankAccountRepository.saveAndFlush(account);
             audit(user, companyId, "BANK_ACCOUNT_UPDATED", account, before);

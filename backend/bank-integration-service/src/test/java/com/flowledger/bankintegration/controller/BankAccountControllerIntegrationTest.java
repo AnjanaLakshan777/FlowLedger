@@ -86,6 +86,7 @@ class BankAccountControllerIntegrationTest {
                 .andExpect(jsonPath("$.id", notNullValue()))
                 .andExpect(jsonPath("$.companyId").value(companyId.toString()))
                 .andExpect(jsonPath("$.bankName").value("Commercial Bank of Ceylon"))
+                .andExpect(jsonPath("$.branchName").value("Colombo 03"))
                 .andExpect(jsonPath("$.accountName").value("ABC Trading (Pvt) Ltd"))
                 .andExpect(jsonPath("$.accountType").value("CURRENT"))
                 .andExpect(jsonPath("$.accountNumberLast4").value("4821"))
@@ -120,6 +121,8 @@ class BankAccountControllerIntegrationTest {
         return Stream.of(
                 Arguments.of("bankName", "   ", "bankName must not be blank"),
                 Arguments.of("bankName", "B".repeat(161), "bankName must be at most 160 characters"),
+                Arguments.of("branchName", " ", "branchName must not be blank"),
+                Arguments.of("branchName", "B".repeat(121), "branchName must be at most 120 characters"),
                 Arguments.of("accountName", null, "accountName must not be blank"),
                 Arguments.of("accountName", "A".repeat(161), "accountName must be at most 160 characters"),
                 Arguments.of("accountType", null, "accountType is required"),
@@ -372,6 +375,7 @@ class BankAccountControllerIntegrationTest {
     private static String requestJson(Map<String, Object> overrides) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("bankName", "Commercial Bank of Ceylon");
+        body.put("branchName", "Colombo 03");
         body.put("accountName", "ABC Trading (Pvt) Ltd");
         body.put("accountType", "CURRENT");
         body.put("accountNumberLast4", "4821");

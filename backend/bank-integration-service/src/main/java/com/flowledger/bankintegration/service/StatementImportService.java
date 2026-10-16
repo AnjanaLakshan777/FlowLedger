@@ -6,10 +6,14 @@ import com.flowledger.bankintegration.entity.BankAccountStatus;
 import com.flowledger.bankintegration.entity.BankAccountType;
 import com.flowledger.bankintegration.entity.BankIntegrationAuditEvent;
 import com.flowledger.bankintegration.entity.BankStatementImportBatch;
+import com.flowledger.bankintegration.entity.ImportBatchStatus;
+import com.flowledger.bankintegration.entity.IntegrationMode;
 import com.flowledger.bankintegration.entity.OutboxEvent;
 import com.flowledger.bankintegration.entity.TransactionCategory;
 import com.flowledger.bankintegration.exception.BankAccountNotActiveException;
 import com.flowledger.bankintegration.exception.BankAccountNotFoundException;
+import com.flowledger.bankintegration.exception.ConnectionModeMismatchException;
+import com.flowledger.bankintegration.exception.StatementImportAlreadyRemovedException;
 import com.flowledger.bankintegration.exception.StatementImportNotFoundException;
 import com.flowledger.bankintegration.exception.StatementRejectedException;
 import com.flowledger.bankintegration.repository.BankAccountRepository;
@@ -116,6 +120,45 @@ public class StatementImportService {
         return readTransaction.execute(status -> response(batch));
     }
 
+    /**
+     * Removes an import, for a statement uploaded by mistake. The transactions it added and the
+     * balance it recorded are deleted, so the latest balance falls back to the one before; the batch
+     * stays as REMOVED history, and the audit history keeps what was removed. Rows the import found
+     * already imported belong to an earlier import and are kept.
+     */
+    public StatementImportResponse removeImport(Jwt user, UUID companyId, UUID batchId) {
+        companyAccessVerifier.verify(user, companyId, IMPORT_ROLES);
+        UUID actor = UUID.fromString(user.getSubject());
+
+        BankStatementImportBatch batch = writeTransaction.execute(status -> {
+            BankStatementImportBatch found = batchRepository.lockByCompanyIdAndId(companyId, batchId)
+                    .orElseThrow(StatementImportNotFoundException::new);
+            if (found.getStatus() == ImportBatchStatus.REMOVED) {
+                throw new StatementImportAlreadyRemovedException();
+            }
+            int transactions = importStore.deleteBatchTransactions(companyId, batchId);
+            int balances = importStore.deleteBatchBalanceSnapshots(companyId, batchId);
+            found.markRemoved(actor, clock.instant());
+            found = batchRepository.saveAndFlush(found);
+
+            Map<String, Object> after = batchDetails(found);
+            after.put("deletedTransactionCount", transactions);
+            after.put("deletedBalanceCount", balances);
+            audit(found, "BANK_STATEMENT_REMOVED", actor, after);
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("companyId", companyId.toString());
+            payload.put("bankAccountId", found.getBankAccountId().toString());
+            payload.put("batchId", batchId.toString());
+            payload.put("deletedTransactionCount", transactions);
+            payload.put("deletedBalanceCount", balances);
+            publish("BankStatementImportBatch", batchId, "BankStatementImportRemoved", payload);
+            log.info("Statement import {} removed: {} transactions and {} balances deleted", batchId, transactions, balances);
+            return found;
+        });
+        return readTransaction.execute(status -> response(batch));
+    }
+
     public StatementImportResponse getImport(Jwt user, UUID companyId, UUID batchId) {
         companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
         return readTransaction.execute(status -> batchRepository.findByCompanyIdAndId(companyId, batchId)
@@ -135,6 +178,10 @@ public class StatementImportService {
                 .orElseThrow(BankAccountNotFoundException::new);
         if (account.getStatus() != BankAccountStatus.ACTIVE || account.getAccountType() != BankAccountType.CURRENT) {
             throw new BankAccountNotActiveException();
+        }
+        if (account.getIntegrationMode() != IntegrationMode.STATEMENT_IMPORT) {
+            throw new ConnectionModeMismatchException(
+                    "This account's bank data is entered manually. Change its connection to bank statement import first.");
         }
         return account;
     }

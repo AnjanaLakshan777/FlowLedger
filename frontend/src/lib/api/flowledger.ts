@@ -14,15 +14,28 @@ export interface ApiDailySale {
 }
 
 export interface ApiBankAccount {
-  id: string; bankName: string; accountName: string; accountType: string; accountNumberLast4: string | null
+  id: string; bankName: string; branchName: string | null; accountName: string; accountType: string; accountNumberLast4: string | null
   currency: string; integrationMode: string; status: string
 }
 
 export interface ApiBalance { bankAccountId: string; balanceAmount: number; currency: string; balanceAsOf: string; sourceType: string }
 
+export interface StatementError { line: number | null; field: string | null; message: string }
+
 export interface ApiStatementImport {
-  id: string; bankAccountId: string; filename: string; status: "IMPORTED" | "FAILED" | string
+  id: string; bankAccountId: string; filename: string; status: "IMPORTED" | "FAILED" | "REMOVED" | string
   periodStart: string | null; periodEnd: string | null; importedAt: string; errorSummary: string | null
+  rowCount: number; importedRowCount: number; duplicateRowCount: number; skippedRowCount: number
+  validationErrors: StatementError[]; earlierImportsOfSameFile: string[]
+  /** Set when a user removed the import; its transactions and balance were deleted. */
+  removedAt: string | null; removedBy: string | null
+}
+
+export interface ManualTransactionRequest {
+  transactionDate: string; direction: "CREDIT" | "DEBIT"; amount: number; description: string
+  chequeNumber: string | null; category: TransactionCategory | null
+  /** Required for OTHER: what the transaction was. */
+  otherDescription: string | null
 }
 
 export type TransactionCategory = "CASH_SALES_DEPOSIT" | "CARD_SALES_SETTLEMENT" | "CHEQUE_PAYMENT" | "OTHER" | "UNCLASSIFIED"
@@ -30,6 +43,9 @@ export type TransactionCategory = "CASH_SALES_DEPOSIT" | "CARD_SALES_SETTLEMENT"
 export interface ApiTransaction {
   id: string; bankAccountId: string; transactionDate: string; direction: "CREDIT" | "DEBIT"; amount: number
   currency: string; description: string | null; runningBalance: number | null; chequeNumber: string | null; category: TransactionCategory
+  /** What an OTHER transaction was; null for every other category. */
+  otherDescription: string | null
+  classificationMethod: "BANK_METADATA" | "RULE" | "MANUAL" | "UNKNOWN"; entrySource: "STATEMENT_IMPORT" | "MANUAL"; sourceImportBatchId: string | null
 }
 
 export type ApiChequeCategory = "SUPPLIER_PAYMENT" | "SALARY" | "TAX" | "OTHER_EXPENSES"
@@ -137,7 +153,7 @@ export interface ApiAccessChange {
 export type IntegrationMode = "STATEMENT_IMPORT" | "MANUAL"
 
 export interface CreateBankAccountRequest {
-  bankName: string; accountName: string; accountType: "CURRENT"; accountNumberLast4: string | null; integrationMode: IntegrationMode
+  bankName: string; branchName: string; accountName: string; accountType: "CURRENT"; accountNumberLast4: string | null; integrationMode: IntegrationMode
 }
 
 const identity = "/api/v1/identity"
@@ -187,6 +203,22 @@ export const flowledger = {
   latestBalance: (c: string, accountId: string) => api<ApiBalance>(`${bank(c)}/bank-accounts/${accountId}/balance-snapshots/latest`),
   statementImports: (c: string) => api<ApiStatementImport[]>(`${bank(c)}/statement-imports`),
   transactions: (c: string, accountId: string) => api<ApiTransaction[]>(`${bank(c)}/bank-transactions?bankAccountId=${accountId}`),
+  uploadStatement: (c: string, accountId: string, file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return api<ApiStatementImport>(`${bank(c)}/bank-accounts/${accountId}/statement-imports`, { method: "POST", form })
+  },
+  classifyTransaction: (c: string, id: string, category: TransactionCategory, otherDescription: string | null = null) =>
+    api<ApiTransaction>(`${bank(c)}/bank-transactions/${id}/classification`, { method: "PUT", json: { category, otherDescription } }),
+  /** Deletes the transactions and balance the import added; the import stays listed as REMOVED. */
+  removeStatementImport: (c: string, batchId: string) =>
+    api<ApiStatementImport>(`${bank(c)}/statement-imports/${batchId}`, { method: "DELETE" }),
+  addManualTransaction: (c: string, accountId: string, body: ManualTransactionRequest) =>
+    api<ApiTransaction>(`${bank(c)}/bank-accounts/${accountId}/manual-transactions`, { method: "POST", json: body }),
+  deleteManualTransaction: (c: string, accountId: string, id: string) =>
+    api<null>(`${bank(c)}/bank-accounts/${accountId}/manual-transactions/${id}`, { method: "DELETE" }),
+  recordManualBalance: (c: string, accountId: string, balanceAmount: number, balanceAsOf: string) =>
+    api<ApiBalance>(`${bank(c)}/bank-accounts/${accountId}/manual-balances`, { method: "POST", json: { balanceAmount, balanceAsOf } }),
 
   cheques: (c: string) => api<ApiCheque[]>(`${payment(c)}/cheques`),
   addCheque: (c: string, body: ChequeRequest) => api<ApiCheque>(`${payment(c)}/cheques`, { method: "POST", json: body }),

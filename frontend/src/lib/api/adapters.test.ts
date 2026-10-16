@@ -58,10 +58,10 @@ describe("forecast runs", () => {
 
 describe("records", () => {
   it("never turns a missing confirmed balance into zero", () => {
-    const account: ApiBankAccount = { id: "acc", bankName: "Commercial Bank of Ceylon", accountName: "E2E", accountType: "CURRENT", accountNumberLast4: "4821", currency: "LKR", integrationMode: "STATEMENT_IMPORT", status: "ACTIVE" }
+    const account: ApiBankAccount = { id: "acc", bankName: "Commercial Bank of Ceylon", branchName: "Colombo 03", accountName: "E2E", accountType: "CURRENT", accountNumberLast4: "4821", currency: "LKR", integrationMode: "STATEMENT_IMPORT", status: "ACTIVE" }
     expect(toBankAccount(account, null, []).balance).toBeNull()
     expect(toBankAccount(account, { bankAccountId: "acc", balanceAmount: 8373.55, currency: "LKR", balanceAsOf: "2026-09-30T18:29:59Z", sourceType: "STATEMENT_IMPORT" }, []))
-      .toMatchObject({ balance: 8373.55, balance_as_of: "2026-09-30T23:59", account_masked: "•••• 4821" })
+      .toMatchObject({ balance: 8373.55, balance_as_of: "2026-09-30T23:59", account_masked: "•••• 4821", branch: "Colombo 03" })
   })
 
   it("maps cheque statuses without a paid status", () => {
@@ -72,7 +72,7 @@ describe("records", () => {
 
   it("signs bank transactions and keeps their category", () => {
     const t = toTransaction({ id: "t", bankAccountId: "a", transactionDate: "2026-10-03", direction: "DEBIT", amount: 1500, currency: "LKR", description: "CHEQUE PAYMENT",
-      runningBalance: 9373.55, chequeNumber: "000777", category: "CHEQUE_PAYMENT" })
+      runningBalance: 9373.55, chequeNumber: "000777", category: "CHEQUE_PAYMENT", otherDescription: null, classificationMethod: "MANUAL", entrySource: "STATEMENT_IMPORT", sourceImportBatchId: "b" })
     expect(t).toMatchObject({ amount: -1500, txn_type: "Cheque", balance_after: 9373.55, reference: "Cheque payment · Cheque 000777" })
   })
 

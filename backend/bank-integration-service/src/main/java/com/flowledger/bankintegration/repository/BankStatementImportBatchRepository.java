@@ -1,7 +1,9 @@
 package com.flowledger.bankintegration.repository;
 
 import com.flowledger.bankintegration.entity.BankStatementImportBatch;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
@@ -15,6 +17,11 @@ public interface BankStatementImportBatchRepository extends JpaRepository<BankSt
     Optional<BankStatementImportBatch> findByCompanyIdAndId(UUID companyId, UUID id);
 
     List<BankStatementImportBatch> findByCompanyIdOrderByImportedAtDesc(UUID companyId);
+
+    // Serializes removal with itself, so a batch is removed once.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select b from BankStatementImportBatch b where b.companyId = :companyId and b.id = :id")
+    Optional<BankStatementImportBatch> lockByCompanyIdAndId(UUID companyId, UUID id);
 
     // Earlier successful imports of the same file into the same account, for information only.
     @Query("""

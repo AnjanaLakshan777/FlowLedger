@@ -106,7 +106,7 @@ class SecurityIntegrationTest {
         mockMvc.perform(post(accountsUrl).header(HttpHeaders.AUTHORIZATION, token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"bankName": "Commercial Bank of Ceylon", "accountName": "ABC Trading (Pvt) Ltd",
+                                {"bankName": "Commercial Bank of Ceylon", "branchName": "Colombo 03", "accountName": "ABC Trading (Pvt) Ltd",
                                  "accountType": "CURRENT", "integrationMode": "MANUAL"}
                                 """))
                 .andExpect(status().isForbidden());

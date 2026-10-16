@@ -12,6 +12,10 @@ public record CreateBankAccountRequest(
         @Size(max = 160, message = "bankName must be at most 160 characters")
         String bankName,
 
+        @NotBlank(message = "branchName must not be blank")
+        @Size(max = 120, message = "branchName must be at most 120 characters")
+        String branchName,
+
         @NotBlank(message = "accountName must not be blank")
         @Size(max = 160, message = "accountName must be at most 160 characters")
         String accountName,

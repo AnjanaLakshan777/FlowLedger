@@ -194,7 +194,7 @@ class StatementImportAuthorizationIntegrationTest {
         return mockMvc.perform(put(transactionsUrl(company) + "/" + transactionId + "/classification")
                 .with(user())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"category\": \"OTHER\"}"));
+                .content("{\"category\": \"OTHER\", \"otherDescription\": \"Loan repayment\"}"));
     }
 
     private static RequestPostProcessor user() {

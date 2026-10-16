@@ -327,7 +327,11 @@ class StatementImportIntegrationTest {
         classify(debit, "CARD_SALES_SETTLEMENT", null).andExpect(status().isBadRequest());
         classify(credit, "CHEQUE_PAYMENT", null).andExpect(status().isBadRequest());
         classify(debit, "CHEQUE_PAYMENT", null).andExpect(status().isOk());
-        classify(credit, "OTHER", null).andExpect(status().isOk());
+        classify(credit, "OTHER", null).andExpect(status().isBadRequest()); // needs a description
+        mockMvc.perform(authenticated(put(transactionsUrl() + "/" + credit + "/classification"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"category\": \"OTHER\", \"otherDescription\": \"Insurance refund\"}"))
+                .andExpect(status().isOk());
         classify(credit, "UNCLASSIFIED", null).andExpect(status().isOk());
         classify(credit, "SALES", null).andExpect(status().isBadRequest());
         mockMvc.perform(authenticated(put(transactionsUrl() + "/" + credit + "/classification"))

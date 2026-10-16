@@ -97,8 +97,9 @@ public class BankTransactionService {
                         + transaction.getDirection() + " transaction.");
             }
 
+            String otherDescription = OtherDescriptions.require(request.category(), request.otherDescription());
             Map<String, Object> before = transaction.classificationSnapshot();
-            if (transaction.classify(request.category(), actor, clock.instant())) {
+            if (transaction.classify(request.category(), otherDescription, actor, clock.instant())) {
                 transaction = transactionRepository.saveAndFlush(transaction);
                 auditEventRepository.save(new BankIntegrationAuditEvent(companyId, actor, "TRANSACTION_CLASSIFIED",
                         "BANK_TRANSACTION", transaction.getId(), reason, before, transaction.classificationSnapshot()));
@@ -118,6 +119,7 @@ public class BankTransactionService {
         payload.put("direction", transaction.getDirection().name());
         payload.put("amount", transaction.getAmount().toPlainString());
         payload.put("category", transaction.getCategory().name());
+        payload.put("otherDescription", transaction.getOtherDescription());
         return payload;
     }
 }

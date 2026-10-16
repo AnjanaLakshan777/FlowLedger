@@ -40,6 +40,18 @@ public class StatementImportStore {
         return ids.stream().findFirst();
     }
 
+    // Removing an import deletes only the rows it added; rows it found already imported belong to an
+    // earlier import and stay.
+    public int deleteBatchTransactions(UUID companyId, UUID batchId) {
+        return jdbcTemplate.update(
+                "DELETE FROM bank_transactions WHERE company_id = ? AND source_import_batch_id = ?", companyId, batchId);
+    }
+
+    public int deleteBatchBalanceSnapshots(UUID companyId, UUID batchId) {
+        return jdbcTemplate.update(
+                "DELETE FROM bank_balance_snapshots WHERE company_id = ? AND source_import_batch_id = ?", companyId, batchId);
+    }
+
     // Returns false if the same balance at the same time was already recorded.
     public boolean insertBalanceSnapshot(UUID companyId, UUID bankAccountId, String currency, BigDecimal balance,
                                          OffsetDateTime balanceAsOf, UUID batchId) {

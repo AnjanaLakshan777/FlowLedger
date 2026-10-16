@@ -23,10 +23,12 @@ public record BankTransactionResponse(
         String chequeNumber,
         String branchCode,
         TransactionCategory category,
+        String otherDescription,
         ClassificationMethod classificationMethod,
         UUID classifiedBy,
         Instant classifiedAt,
         UUID sourceImportBatchId,
+        String entrySource,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -45,10 +47,12 @@ public record BankTransactionResponse(
                 transaction.getChequeNumber(),
                 transaction.getBranchCode(),
                 transaction.getCategory(),
+                transaction.getOtherDescription(),
                 transaction.getClassificationMethod(),
                 transaction.getClassifiedBy(),
                 transaction.getClassifiedAt(),
                 transaction.getSourceImportBatchId(),
+                transaction.getEntrySource(),
                 transaction.getCreatedAt(),
                 transaction.getUpdatedAt()
         );

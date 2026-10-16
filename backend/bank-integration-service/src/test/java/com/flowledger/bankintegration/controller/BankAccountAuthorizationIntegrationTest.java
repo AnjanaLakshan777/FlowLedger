@@ -42,7 +42,7 @@ class BankAccountAuthorizationIntegrationTest {
     private static final FakeIdentityServer identityService = FakeIdentityServer.instance();
     private static final String USER_TOKEN = "user-access-token";
     private static final String CREATE_REQUEST = """
-            {"bankName": "Commercial Bank of Ceylon", "accountName": "ABC Trading (Pvt) Ltd",
+            {"bankName": "Commercial Bank of Ceylon", "branchName": "Colombo 03", "accountName": "ABC Trading (Pvt) Ltd",
              "accountType": "CURRENT", "accountNumberLast4": "4821", "integrationMode": "MANUAL"}
             """;
 

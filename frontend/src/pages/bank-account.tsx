@@ -16,9 +16,16 @@ import type { BankTransaction } from "@/data/types"
 import { requiresBackend } from "@/lib/demo"
 import { fmt } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import LiveBankAccountPage from "./bank-account-live"
 
-/** The company's one current bank account (MVP). */
+/** Live data comes from bank-integration-service; the demonstration screen is used in demo mode and tests. */
 export default function BankAccountPage() {
+  const { mode } = useAppState()
+  return mode === "live" ? <LiveBankAccountPage /> : <DemoBankAccountPage />
+}
+
+/** The company's one current bank account (MVP), with the demonstration data. */
+function DemoBankAccountPage() {
   const { bankAccount: acct, transactions, allow, mode, forecastInfo } = useAppState()
   const live = mode === "live"
   const notReady = useNotReady(["bank"])

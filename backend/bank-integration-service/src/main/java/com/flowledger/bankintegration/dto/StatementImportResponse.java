@@ -32,7 +32,9 @@ public record StatementImportResponse(
         Instant importedAt,
         String errorSummary,
         List<StatementError> validationErrors,
-        List<UUID> earlierImportsOfSameFile
+        List<UUID> earlierImportsOfSameFile,
+        Instant removedAt,
+        UUID removedBy
 ) {
 
     public static StatementImportResponse from(BankStatementImportBatch batch, List<UUID> earlierImportsOfSameFile) {
@@ -54,7 +56,9 @@ public record StatementImportResponse(
                 batch.getImportedAt(),
                 batch.getErrorSummary(),
                 batch.getValidationErrors(),
-                earlierImportsOfSameFile
+                earlierImportsOfSameFile,
+                batch.getRemovedAt(),
+                batch.getRemovedBy()
         );
     }
 }

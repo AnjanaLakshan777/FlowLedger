@@ -36,6 +36,10 @@ export const CATEGORY_LABEL: Record<TransactionCategory, string> = {
   CASH_SALES_DEPOSIT: "Cash sales deposit", CARD_SALES_SETTLEMENT: "Card sales settlement", CHEQUE_PAYMENT: "Cheque payment",
   OTHER: "Other", UNCLASSIFIED: "Unclassified",
 }
+/** "Other - Electricity" for an OTHER transaction with a description; otherwise the category's label. */
+export const categoryText = (category: TransactionCategory, otherDescription?: string | null) =>
+  category === "OTHER" && otherDescription ? `Other - ${otherDescription}` : CATEGORY_LABEL[category]
+
 // The calendar picks its icon from these transaction types.
 const CALENDAR_TYPE: Partial<Record<TransactionCategory, string>> = {
   CASH_SALES_DEPOSIT: "Cash deposit", CARD_SALES_SETTLEMENT: "Card settlement transfer", CHEQUE_PAYMENT: "Cheque",
@@ -70,9 +74,9 @@ export function toDailySale(s: ApiDailySale, currentUserId: string | null): Dail
 export function toTransaction(t: ApiTransaction): BankTransaction {
   return {
     txn_id: t.id, txn_date: t.transactionDate, value_date: "", description: t.description ?? "",
-    reference: [CATEGORY_LABEL[t.category], t.chequeNumber && `Cheque ${t.chequeNumber}`].filter(Boolean).join(" · "),
+    reference: [categoryText(t.category, t.otherDescription), t.chequeNumber && `Cheque ${t.chequeNumber}`].filter(Boolean).join(" · "),
     amount: t.direction === "CREDIT" ? t.amount : -t.amount,
-    txn_type: CALENDAR_TYPE[t.category] ?? CATEGORY_LABEL[t.category],
+    txn_type: CALENDAR_TYPE[t.category] ?? categoryText(t.category, t.otherDescription),
     match_status: "Matched", matched_record: "", confidence: null, note: "", balance_after: t.runningBalance,
   }
 }
@@ -85,12 +89,12 @@ export function toBankAccount(account: ApiBankAccount, balance: ApiBalance | nul
   return {
     bank: account.bankName, account_name: account.accountName, account_type: "Current",
     account_masked: account.accountNumberLast4 ? `•••• ${account.accountNumberLast4}` : "Not provided",
-    branch: "Not provided", currency: account.currency,
+    branch: account.branchName ?? "Not provided", currency: account.currency,
     balance: balance?.balanceAmount ?? null,
     balance_as_of: balance ? colomboLocal(balance.balanceAsOf) : "",
     sync_status: latest?.status === "FAILED" ? "Error" : "Synced",
     last_sync: lastImported ? colomboLocal(lastImported.importedAt) : "",
-    integration: account.integrationMode === "STATEMENT_IMPORT" ? "Bank statement import" : account.integrationMode,
+    integration: account.integrationMode === "STATEMENT_IMPORT" ? "Bank statement import" : account.integrationMode === "MANUAL" ? "Manual entry" : account.integrationMode,
     error: latest?.status === "FAILED" ? `The latest statement file (${latest.filename}) was rejected: ${latest.errorSummary ?? "invalid file"}.` : "",
   }
 }

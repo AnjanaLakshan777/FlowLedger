@@ -85,6 +85,12 @@ public class BankStatementImportBatch {
     @Column(name = "validation_errors", nullable = false)
     private List<StatementError> validationErrors;
 
+    @Column(name = "removed_at")
+    private Instant removedAt;
+
+    @Column(name = "removed_by")
+    private UUID removedBy;
+
     private BankStatementImportBatch(UUID companyId, UUID bankAccountId, String filename, String fileSha256,
                                      String fileFormat, ImportBatchStatus status, UUID importedBy) {
         this.companyId = companyId;
@@ -117,6 +123,13 @@ public class BankStatementImportBatch {
         batch.periodEnd = periodEnd;
         batch.rowCount = rowCount;
         return batch;
+    }
+
+    // The batch stays as history; its transactions and balance are deleted by the caller.
+    public void markRemoved(UUID actor, Instant now) {
+        this.status = ImportBatchStatus.REMOVED;
+        this.removedBy = actor;
+        this.removedAt = now;
     }
 
     public void recordOutcome(int importedRowCount, int duplicateRowCount, int skippedRowCount) {

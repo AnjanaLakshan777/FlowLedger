@@ -13,6 +13,8 @@ export class ApiError extends Error {
     message: string,
     /** Field errors from a 400 validation answer, keyed by field name. */
     readonly fieldErrors: Record<string, string> = {},
+    /** The whole problem-details body, for answers with extra members (such as the row errors of a rejected statement). */
+    readonly problem: Record<string, unknown> = {},
   ) {
     super(message)
   }
@@ -88,7 +90,9 @@ export async function api<T>(path: string, { method = "GET", json, form, signal,
     throw new ApiError(401, "Your session has ended. Please sign in again.")
   }
   const problem = (body ?? {}) as { detail?: string; title?: string; errors?: Record<string, string> }
-  throw new ApiError(res.status, problem.detail ?? problem.title ?? `Request failed (${res.status}).`, problem.errors ?? {})
+  // A field-error map is an object; a rejected statement sends a list of row errors instead.
+  const fieldErrors = problem.errors && !Array.isArray(problem.errors) ? problem.errors : {}
+  throw new ApiError(res.status, problem.detail ?? problem.title ?? `Request failed (${res.status}).`, fieldErrors, problem as Record<string, unknown>)
 }
 
 function safeJson(text: string): unknown {

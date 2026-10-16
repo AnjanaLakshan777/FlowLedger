@@ -287,7 +287,7 @@ export default function LiveUsersSettingsPage() {
               <CardContent>
                 {account ? (
                   <Details items={[
-                    ["Bank", account.bankName], ["Account name", account.accountName],
+                    ["Bank", account.bankName], ["Branch", account.branchName ?? "Not provided"], ["Account name", account.accountName],
                     ["Account number", <span className="font-mono">{account.accountNumberLast4 ? `•••• ${account.accountNumberLast4}` : "—"}</span>],
                     ["Account type", "Current Account"], ["Currency", account.currency],
                     ["Connection", MODE_LABEL[account.integrationMode] ?? account.integrationMode],
@@ -459,6 +459,7 @@ function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: 
   companyId: string; account: ApiBankAccount | null; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void
 }) {
   const [bankName, setBankName] = useState("")
+  const [branchName, setBranchName] = useState("")
   const [accountName, setAccountName] = useState("")
   const [last4, setLast4] = useState("")
   const [mode, setMode] = useState<string>("STATEMENT_IMPORT")
@@ -466,7 +467,7 @@ function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: 
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (!open) return
-    setBankName(account?.bankName ?? ""); setAccountName(account?.accountName ?? "")
+    setBankName(account?.bankName ?? ""); setBranchName(account?.branchName ?? ""); setAccountName(account?.accountName ?? "")
     setLast4(account?.accountNumberLast4 ?? ""); setMode(account?.integrationMode ?? "STATEMENT_IMPORT"); setErrors({})
   }, [open, account])
   // An account made with another connection keeps it unless the admin picks one of these.
@@ -475,7 +476,7 @@ function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: 
   async function submit() {
     if (last4 && !/^\d{4}$/.test(last4)) return setErrors({ accountNumberLast4: "Enter exactly the last 4 digits." })
     setBusy(true)
-    const body = { bankName: bankName.trim(), accountName: accountName.trim(), accountNumberLast4: last4 || null, integrationMode: mode as IntegrationMode }
+    const body = { bankName: bankName.trim(), branchName: branchName.trim(), accountName: accountName.trim(), accountNumberLast4: last4 || null, integrationMode: mode as IntegrationMode }
     try {
       if (account) {
         await flowledger.updateBankAccount(companyId, account.id, body)
@@ -500,6 +501,7 @@ function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: 
           <DialogDescription>Only the last four digits of the account number are stored.</DialogDescription>
         </DialogHeader>
         <Field label="Bank" htmlFor="bank-name" error={errors.bankName}><Input id="bank-name" placeholder="e.g. Commercial Bank" value={bankName} onChange={(e) => setBankName(e.target.value)} /></Field>
+        <Field label="Branch" htmlFor="bank-branch" error={errors.branchName}><Input id="bank-branch" placeholder="e.g. Colombo 03" value={branchName} onChange={(e) => setBranchName(e.target.value)} /></Field>
         <Field label="Account name" htmlFor="bank-account" error={errors.accountName}><Input id="bank-account" value={accountName} onChange={(e) => setAccountName(e.target.value)} /></Field>
         <Field label="Last 4 digits of the account number" htmlFor="bank-last4" error={errors.accountNumberLast4} help="Optional">
           <Input id="bank-last4" inputMode="numeric" maxLength={4} className="font-mono" value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, ""))} />
@@ -512,7 +514,7 @@ function BankAccountDialog({ companyId, account, open, onOpenChange, onSaved }: 
         </Field>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={busy || !bankName.trim() || !accountName.trim()} onClick={submit}>{account ? "Save changes" : "Set up account"}</Button>
+          <Button disabled={busy || !bankName.trim() || !branchName.trim() || !accountName.trim()} onClick={submit}>{account ? "Save changes" : "Set up account"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

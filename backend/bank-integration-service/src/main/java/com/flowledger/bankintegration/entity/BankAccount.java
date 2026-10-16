@@ -42,6 +42,10 @@ public class BankAccount {
     @Column(name = "bank_name", nullable = false, length = 160)
     private String bankName;
 
+    // Null only for accounts set up before the branch was recorded.
+    @Column(name = "branch_name", length = 120)
+    private String branchName;
+
     @Column(name = "account_name", nullable = false, length = 160)
     private String accountName;
 
@@ -75,10 +79,11 @@ public class BankAccount {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    public BankAccount(UUID companyId, String bankName, String accountName, BankAccountType accountType,
+    public BankAccount(UUID companyId, String bankName, String branchName, String accountName, BankAccountType accountType,
                        String accountNumberLast4, IntegrationMode integrationMode, BankAccountStatus status) {
         this.companyId = companyId;
         this.bankName = bankName;
+        this.branchName = branchName;
         this.accountName = accountName;
         this.accountType = accountType;
         this.accountNumberLast4 = accountNumberLast4;
@@ -91,10 +96,11 @@ public class BankAccount {
     }
 
     // Returns whether anything changed.
-    public boolean changeDetails(String bankName, String accountName, String accountNumberLast4,
+    public boolean changeDetails(String bankName, String branchName, String accountName, String accountNumberLast4,
                                  IntegrationMode integrationMode) {
         Map<String, Object> before = detailsSnapshot();
         this.bankName = bankName;
+        this.branchName = branchName;
         this.accountName = accountName;
         this.accountNumberLast4 = accountNumberLast4;
         this.integrationMode = integrationMode;
@@ -109,6 +115,7 @@ public class BankAccount {
     public Map<String, Object> detailsSnapshot() {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("bankName", bankName);
+        snapshot.put("branchName", branchName);
         snapshot.put("accountName", accountName);
         snapshot.put("accountNumberLast4", accountNumberLast4);
         snapshot.put("integrationMode", integrationMode.name());

@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -69,6 +70,10 @@ public class BankTransaction {
     @Column(name = "category", nullable = false, length = 32)
     private TransactionCategory category;
 
+    // What an OTHER transaction was, as the user wrote it; null for every other category.
+    @Column(name = "other_description", length = 120)
+    private String otherDescription;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "classification_method", nullable = false, length = 24)
     private ClassificationMethod classificationMethod;
@@ -82,6 +87,13 @@ public class BankTransaction {
     @Column(name = "source_import_batch_id", updatable = false)
     private UUID sourceImportBatchId;
 
+    // STATEMENT_IMPORT or MANUAL; written only on insert, by SQL.
+    @Column(name = "entry_source", insertable = false, updatable = false)
+    private String entrySource;
+
+    @Column(name = "entered_by", insertable = false, updatable = false)
+    private UUID enteredBy;
+
     // Insertion order (oldest first per statement), used to keep the bank's order within a day.
     @Column(name = "entry_sequence", insertable = false, updatable = false)
     private Long entrySequence;
@@ -92,12 +104,15 @@ public class BankTransaction {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    // Returns false when the category is unchanged, so nothing is updated or audited.
-    public boolean classify(TransactionCategory newCategory, UUID actor, Instant now) {
-        if (newCategory == category) {
+    // Returns false when the category and description are unchanged, so nothing is updated or audited.
+    // The description is kept only for OTHER.
+    public boolean classify(TransactionCategory newCategory, String newOtherDescription, UUID actor, Instant now) {
+        String description = newCategory == TransactionCategory.OTHER ? newOtherDescription : null;
+        if (newCategory == category && Objects.equals(description, otherDescription)) {
             return false;
         }
         this.category = newCategory;
+        this.otherDescription = description;
         this.classificationMethod = ClassificationMethod.MANUAL;
         this.classifiedBy = actor;
         this.classifiedAt = now;
@@ -108,6 +123,7 @@ public class BankTransaction {
     public Map<String, Object> classificationSnapshot() {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("category", category.name());
+        snapshot.put("otherDescription", otherDescription);
         snapshot.put("classificationMethod", classificationMethod.name());
         snapshot.put("classifiedBy", classifiedBy == null ? null : classifiedBy.toString());
         snapshot.put("classifiedAt", classifiedAt == null ? null : classifiedAt.toString());

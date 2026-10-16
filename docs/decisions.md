@@ -397,6 +397,55 @@ administration as above (active `SYSTEM_ADMIN` in any company, or active
   cannot be changed (409). Both write `BANK_ACCOUNT_UPDATED` or
   `BANK_ACCOUNT_DEACTIVATED` to `bank_integration_audit_events`, with the
   details before and after; an edit that changes nothing writes nothing.
+- Every account records its branch (`branchName`, required when an account is
+  set up or edited; `V3__add_branch_and_manual_entry.sql` adds the nullable
+  column, so accounts set up earlier show none until edited).
+
+### Bank Data Connections
+
+Confirmed by the product owner on 2026-10-17. An account takes bank data
+only the way its connection says, so nothing is recorded twice; the other
+way is refused with 409 (change the connection first).
+
+- **Bank statement import** (`STATEMENT_IMPORT`): the Bank Account screen
+  uploads the "Transaction details" CSV statement to the existing statement
+  import API and lists the account's imports. A rejected file shows its row
+  errors; nothing from it is imported.
+- **Manual entry** (`MANUAL`): typed in from the bank's own record.
+  `POST .../bank-accounts/{id}/manual-balances` `{balanceAmount,
+  balanceAsOf}` records a confirmed balance (`source_type = MANUAL`; may be
+  negative; not in the future; the same balance at the same time again is
+  409). `POST .../manual-transactions` `{transactionDate, direction, amount,
+  description, chequeNumber?, category?}` records one transaction
+  (`entry_source = MANUAL`, `entered_by` the user, no running balance or
+  import batch; not in the future; a category must fit the direction).
+  `DELETE .../manual-transactions/{id}` removes a manual entry typed in by
+  mistake; imported transactions cannot be deleted (400). Each writes an
+  audit event (`BANK_BALANCE_ENTERED`, `BANK_TRANSACTION_ENTERED`,
+  `BANK_TRANSACTION_DELETED`) and an outbox event.
+- Both are allowed for `COMPANY_ADMIN` and `FINANCE_CONTROLLER` (UI
+  permission `bank.enterData`); Accountants view only. The latest balance is
+  the newest snapshot from either source, so the forecast and Forecast vs
+  Actual use manual data exactly like imported data.
+- The Bank Account screen also classifies transactions (cash sales deposit,
+  card settlement, cheque payment, other) through the existing
+  classification API, since only classified transactions count in Forecast
+  vs Actual.
+- An `OTHER` transaction must say what it was (`otherDescription`, at most
+  120 characters; 400 without it), on classification and on manual entry,
+  and is shown as "Other - <description>". The description is cleared when
+  another category is chosen; changing only the description is a change and
+  is audited. `V4__add_other_description_and_statement_removal.sql` adds the
+  column; `OTHER` transactions classified earlier have none.
+- `DELETE .../statement-imports/{batchId}` (`COMPANY_ADMIN`,
+  `FINANCE_CONTROLLER`) removes a statement uploaded by mistake: the
+  transactions it added and the balance it recorded are deleted (with any
+  categories given to them), so the latest balance falls back to the one
+  before. Rows it found already imported belong to an earlier import and
+  stay. The batch is kept as `REMOVED` with `removed_at` and `removed_by`, so
+  the same file can be uploaded again; a second removal is 409. It writes
+  `BANK_STATEMENT_REMOVED` with the deleted counts and a
+  `BankStatementImportRemoved` outbox event.
 
 ### SYSTEM_ADMIN Provisioning Procedure
 
