@@ -2,6 +2,7 @@ package com.flowledger.forecast.entity;
 
 import com.flowledger.forecast.calculation.ForecastCalculator;
 import com.flowledger.forecast.calculation.ForecastParameters;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -21,7 +22,9 @@ import java.util.UUID;
 
 /**
  * A company's forecast settings. Versions are kept, and every run stores a copy of the version it
- * used. There is no API to change settings yet; the first run creates version 1 with the defaults.
+ * used. There is no API to change settings yet; the first run of a company creates version 1 with
+ * the PREVIOUS_YEAR_PATTERN defaults. Companies that had a WEEKDAY_AVERAGE version 1 were moved to a
+ * new PREVIOUS_YEAR_PATTERN version by migration V6; their old version and its runs are unchanged.
  */
 @Entity
 @Table(name = "forecast_model_configs")
@@ -29,7 +32,10 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED) // Required by JPA
 public class ForecastModelConfig {
 
+    /** Method of WEEKDAY_AVERAGE configurations. */
     public static final String METHOD_CODE = "HISTORICAL_BANK_CASH_FLOW_PATTERN";
+    /** Method of PREVIOUS_YEAR_PATTERN configurations (Option B). */
+    public static final String PREVIOUS_YEAR_METHOD_CODE = "PREVIOUS_YEAR_CORRESPONDING_WEEK_PATTERN";
 
     @Id
     @Generated
@@ -72,8 +78,8 @@ public class ForecastModelConfig {
         config.active = true;
         config.horizonDays = (short) ForecastCalculator.HORIZON_DAYS;
         config.minimumBalance = BigDecimal.ZERO.setScale(2);
-        config.methodCode = METHOD_CODE;
-        config.parameters = ForecastParameters.DEFAULTS;
+        config.methodCode = PREVIOUS_YEAR_METHOD_CODE;
+        config.parameters = ForecastParameters.PREVIOUS_YEAR_DEFAULTS;
         config.createdBy = createdBy;
         return config;
     }
@@ -90,6 +96,14 @@ public class ForecastModelConfig {
         snapshot.put("lookbackWeeks", parameters.lookbackWeeks());
         snapshot.put("minimumSamplesPerWeekday", parameters.minimumSamplesPerWeekday());
         snapshot.put("balanceStaleAfterDays", parameters.balanceStaleAfterDays());
+        // Only in configurations that have them, so WEEKDAY_AVERAGE snapshots keep their shape.
+        if (parameters.cashReceiptLagDays() != null) {
+            snapshot.put("cashReceiptLagDays", parameters.cashReceiptLagDays());
+            snapshot.put("cardReceiptLagDays", parameters.cardReceiptLagDays());
+            snapshot.put("growthRatioWarningLow", parameters.growthRatioWarningLow().toPlainString());
+            snapshot.put("growthRatioWarningHigh", parameters.growthRatioWarningHigh().toPlainString());
+            snapshot.put("referenceOffsetDays", PreviousYearPatternStrategy.REFERENCE_OFFSET_DAYS);
+        }
         return snapshot;
     }
 }

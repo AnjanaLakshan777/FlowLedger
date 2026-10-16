@@ -44,7 +44,10 @@ export interface ChequeRequest {
   expectedClearingDate: string; notes: string | null; version?: number
 }
 
-export interface ForecastWarning { code: "BALANCE_STALE" | "INSUFFICIENT_HISTORY" | "INCOMPLETE_CLASSIFICATION" | "ACTUALS_INCOMPLETE" | string; message: string }
+export interface ForecastWarning {
+  code: "BALANCE_STALE" | "INSUFFICIENT_HISTORY" | "INCOMPLETE_CLASSIFICATION" | "ACTUALS_INCOMPLETE" | "PATTERN_FROM_SALES_HISTORY" | "GROWTH_RATIO_OUT_OF_RANGE" | string
+  message: string
+}
 
 export interface ForecastRunSummary {
   id: string; bankAccountId: string; runStatus: string; asOfAt: string; horizonStartDate: string; horizonEndDate: string

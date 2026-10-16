@@ -1,5 +1,6 @@
 package com.flowledger.cashmanagement.salesimport;
 
+import com.flowledger.cashmanagement.dto.SalesHistoryResponse;
 import com.flowledger.cashmanagement.dto.SalesImportBatchResponse;
 import com.flowledger.cashmanagement.dto.SalesImportRowResponse;
 import lombok.RequiredArgsConstructor;
@@ -190,6 +191,25 @@ public class SalesImportStore {
                             raw == null ? null : jsonMapper.readValue(raw, RAW)));
                 }, batchId);
         return rows;
+    }
+
+    /**
+     * Valid rows of approved imports with a sale date between from and to, oldest first. Approval
+     * guarantees one such row per company and date.
+     */
+    public List<SalesHistoryResponse.Day> approvedSales(UUID companyId, LocalDate from, LocalDate to) {
+        return jdbcTemplate.query("""
+                        SELECT r.sale_date, r.cash_sales_amount, r.card_sales_amount, b.id AS batch_id
+                        FROM sales_import_rows r
+                        JOIN sales_import_batches b ON b.id = r.batch_id
+                        WHERE b.company_id = ? AND b.status = 'APPROVED' AND r.validation_status = 'VALID'
+                          AND r.sale_date BETWEEN ? AND ?
+                        ORDER BY r.sale_date
+                        """,
+                (rs, rowNum) -> new SalesHistoryResponse.Day(rs.getObject("sale_date", LocalDate.class),
+                        rs.getBigDecimal("cash_sales_amount"), rs.getBigDecimal("card_sales_amount"),
+                        rs.getObject("batch_id", UUID.class)),
+                companyId, from, to);
     }
 
     public List<LocalDate> validDates(UUID batchId) {

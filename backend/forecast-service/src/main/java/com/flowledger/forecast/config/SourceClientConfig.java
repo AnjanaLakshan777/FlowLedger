@@ -11,10 +11,12 @@ import java.time.Duration;
 
 /**
  * Clients for the services that own the forecast inputs: bank-integration-service (account,
- * balance, statements, transactions) and payment-service (internal cheque scan and summary).
+ * balance, statements, transactions), payment-service (internal cheque scan and summary) and
+ * cash-management-service (approved historical sales).
  */
 @Configuration
-@EnableConfigurationProperties({BankIntegrationProperties.class, PaymentServiceProperties.class})
+@EnableConfigurationProperties({BankIntegrationProperties.class, PaymentServiceProperties.class,
+        CashManagementProperties.class})
 public class SourceClientConfig {
 
     @Bean
@@ -24,6 +26,11 @@ public class SourceClientConfig {
 
     @Bean
     public RestClient paymentRestClient(PaymentServiceProperties properties) {
+        return restClient(properties.baseUrl(), properties.connectTimeout(), properties.readTimeout());
+    }
+
+    @Bean
+    public RestClient cashManagementRestClient(CashManagementProperties properties) {
         return restClient(properties.baseUrl(), properties.connectTimeout(), properties.readTimeout());
     }
 

@@ -212,6 +212,8 @@ function ForecastNotices({ warnings, outdated, madeAt, onUpdate, updating }: {
     BALANCE_STALE: "The opening balance is out of date",
     INSUFFICIENT_HISTORY: "Receipts could not be estimated",
     INCOMPLETE_CLASSIFICATION: "Some bank transactions are not classified",
+    PATTERN_FROM_SALES_HISTORY: "Last year's pattern partly comes from imported sales",
+    GROWTH_RATIO_OUT_OF_RANGE: "This year's collections differ strongly from last year",
   }
   return (
     <>

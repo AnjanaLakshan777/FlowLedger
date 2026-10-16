@@ -1,6 +1,7 @@
 package com.flowledger.forecast.controller;
 
 import com.flowledger.forecast.support.FakeIdentityServer;
+import com.flowledger.forecast.support.ForecastConfigs;
 import com.flowledger.forecast.support.FakePaymentInternalApi;
 import com.flowledger.forecast.support.FakeSourceServices;
 import com.flowledger.forecast.support.FixedClockConfig;
@@ -84,6 +85,8 @@ class ForecastChequeVerificationIntegrationTest {
         accountId = UUID.randomUUID();
         chequeId = UUID.randomUUID();
         projected = new ProjectedCheques(jdbcTemplate);
+        // These tests cover the WEEKDAY_AVERAGE method; PREVIOUS_YEAR_PATTERN has its own tests.
+        ForecastConfigs.weekdayAverage(jdbcTemplate, companyId);
         identityService.reset();
         bank.reset();
         payment.reset(internalKey);

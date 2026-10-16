@@ -135,6 +135,21 @@ public final class FakeSourceServices {
         reply(importsPath(companyId), 200, "[" + batches + "]");
     }
 
+    // cash-management-service's approved sales history, served by the same fake.
+    public static String salesHistoryPath(UUID companyId) {
+        return "/api/v1/cash-management/companies/" + companyId + "/sales-history";
+    }
+
+    public void salesHistory(UUID companyId, List<String> days) {
+        reply(salesHistoryPath(companyId), 200, "{\"days\": [" + String.join(",", days) + "]}");
+    }
+
+    public static String approvedSale(LocalDate saleDate, String cash, String card, UUID batchId) {
+        return """
+                {"saleDate": "%s", "cashSalesAmount": %s, "cardSalesAmount": %s, "importBatchId": "%s"}
+                """.formatted(saleDate, cash, card, batchId);
+    }
+
     public void transactions(UUID companyId, List<String> transactions) {
         reply(transactionsPath(companyId), 200, "[" + String.join(",", transactions) + "]");
     }

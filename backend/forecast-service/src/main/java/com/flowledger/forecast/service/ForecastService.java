@@ -7,15 +7,19 @@ import com.flowledger.forecast.calculation.ForecastParameters;
 import com.flowledger.forecast.calculation.InflowEstimate;
 import com.flowledger.forecast.calculation.InflowForecastStrategy;
 import com.flowledger.forecast.calculation.InflowHistory;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.ApprovedSale;
 import com.flowledger.forecast.calculation.StatementCoverage;
 import com.flowledger.forecast.client.BankIntegrationClient;
 import com.flowledger.forecast.client.BankIntegrationClient.Balance;
 import com.flowledger.forecast.client.BankIntegrationClient.Transaction;
+import com.flowledger.forecast.client.CashManagementClient;
 import com.flowledger.forecast.dto.ForecastRunResponse;
 import com.flowledger.forecast.dto.ForecastRunSummaryResponse;
 import com.flowledger.forecast.entity.DataQuality;
 import com.flowledger.forecast.entity.ForecastModelConfig;
 import com.flowledger.forecast.entity.ForecastRun;
+import com.flowledger.forecast.entity.PatternQuality;
 import com.flowledger.forecast.exception.BalanceNotAvailableException;
 import com.flowledger.forecast.exception.ForecastRunNotFoundException;
 import com.flowledger.forecast.repository.ForecastDailyResultRepository;
@@ -42,6 +46,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -57,7 +62,9 @@ import java.util.stream.Collectors;
 
 /**
  * Creates and reads rolling 84-day forecasts. A run starts from the latest confirmed bank balance
- * of the company's current account, adds sales inflows estimated from classified bank history,
+ * of the company's current account, adds sales inflows estimated by the configured method
+ * (PREVIOUS_YEAR_PATTERN, or WEEKDAY_AVERAGE for older configurations) from classified bank history
+ * and approved historical sales,
  * and deducts ISSUED cheques on their expected clearing dates. Bank inputs come from
  * bank-integration-service's API; cheques come from forecast's own projection of payment-service's
  * cheques, and only while that projection is verified complete (otherwise the forecast is refused).
@@ -80,6 +87,7 @@ public class ForecastService {
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
 
     private static final String MODEL_VERSION_PREFIX = "1:";
+    private static final String PREVIOUS_YEAR_MODEL_VERSION_PREFIX = "2:";
 
     private final ForecastModelConfigRepository configRepository;
     private final ForecastRunRepository runRepository;
@@ -87,6 +95,7 @@ public class ForecastService {
     private final ForecastRunChequeRepository runChequeRepository;
     private final ForecastRunStore runStore;
     private final BankIntegrationClient bankIntegrationClient;
+    private final CashManagementClient cashManagementClient;
     private final VerifiedChequeProjection chequeProjection;
     private final CompanyAccessVerifier companyAccessVerifier;
     private final Map<String, InflowForecastStrategy> strategies;
@@ -103,6 +112,7 @@ public class ForecastService {
                            ForecastRunChequeRepository runChequeRepository,
                            ForecastRunStore runStore,
                            BankIntegrationClient bankIntegrationClient,
+                           CashManagementClient cashManagementClient,
                            VerifiedChequeProjection chequeProjection,
                            CompanyAccessVerifier companyAccessVerifier,
                            List<InflowForecastStrategy> strategies,
@@ -114,6 +124,7 @@ public class ForecastService {
         this.runChequeRepository = runChequeRepository;
         this.runStore = runStore;
         this.bankIntegrationClient = bankIntegrationClient;
+        this.cashManagementClient = cashManagementClient;
         this.chequeProjection = chequeProjection;
         this.companyAccessVerifier = companyAccessVerifier;
         this.strategies = strategies.stream()
@@ -129,8 +140,9 @@ public class ForecastService {
         UUID actor = UUID.fromString(user.getSubject());
         ForecastModelConfig config = activeConfig(companyId, actor);
         ForecastParameters parameters = config.getParameters();
+        boolean previousYear = PreviousYearPatternStrategy.CODE.equals(parameters.strategy());
         InflowForecastStrategy strategy = strategies.get(parameters.strategy());
-        if (strategy == null) {
+        if (!previousYear && strategy == null) {
             throw new IllegalStateException("Unknown forecast strategy " + parameters.strategy());
         }
 
@@ -144,34 +156,35 @@ public class ForecastService {
         LocalDate today = LocalDate.now(clock);
         LocalDate balanceDate = LocalDate.ofInstant(balance.balanceAsOf(), clock.getZone());
         List<LocalDate> horizon = ForecastCalculator.horizon(balanceDate.plusDays(1));
-        LocalDate historyFrom = balanceDate.minusWeeks(parameters.lookbackWeeks()).plusDays(1);
 
         List<StatementCoverage.Period> periods = importedPeriods(user, companyId, accountId);
-        List<Transaction> history = bankIntegrationClient.listTransactions(
-                user, companyId, accountId, historyFrom, balanceDate);
+        Inflows inflows = previousYear
+                ? previousYearInflows(user, companyId, accountId, balanceDate, horizon, periods, parameters)
+                : weekdayInflows(user, companyId, accountId, balanceDate, horizon, periods, parameters, strategy);
         List<ExpectedCheque> cheques = chequeProjection
                 .issuedCheques(companyId, accountId, horizon.getFirst(), horizon.getLast()).stream()
                 .sorted(Comparator.comparing(ExpectedCheque::expectedClearingDate)
                         .thenComparing(ExpectedCheque::chequeNumber))
                 .toList();
 
-        Set<LocalDate> covered = StatementCoverage.coveredDates(periods, historyFrom, balanceDate);
-        InflowEstimate estimate = strategy.estimate(
-                inflowHistory(historyFrom, balanceDate, covered, history), horizon, parameters);
+        InflowEstimate estimate = inflows.estimate();
         List<DailyProjection> days = ForecastCalculator.project(balance.balanceAmount(), horizon, estimate, cheques);
 
         long balanceAgeDays = ChronoUnit.DAYS.between(balanceDate, today);
-        List<Transaction> unclassifiedCredits = history.stream()
+        List<Transaction> unclassifiedCredits = inflows.transactions().stream()
                 .filter(transaction -> CREDIT.equals(transaction.direction())
                         && UNCLASSIFIED.equals(transaction.category()))
                 .toList();
-        DataQuality quality = new DataQuality(historyFrom, balanceDate, covered.size(),
+        DataQuality quality = new DataQuality(inflows.historyFrom(), balanceDate, inflows.coveredDays(),
                 weekdayCounts(estimate.samplesPerWeekday()), parameters.minimumSamplesPerWeekday(),
                 unclassifiedCredits.size(), sum(unclassifiedCredits),
-                balanceAgeDays, parameters.balanceStaleAfterDays());
+                balanceAgeDays, parameters.balanceStaleAfterDays(), inflows.pattern());
 
-        String modelVersion = MODEL_VERSION_PREFIX + strategy.code();
-        String inputHash = inputHash(modelVersion, config, accountId, balance, today, periods, history, cheques);
+        String modelVersion = previousYear
+                ? PREVIOUS_YEAR_MODEL_VERSION_PREFIX + PreviousYearPatternStrategy.CODE
+                : MODEL_VERSION_PREFIX + strategy.code();
+        String inputHash = inputHash(modelVersion, config, accountId, balance, today, periods, inflows.transactions(),
+                cheques, inflows.extraHashInput());
         ForecastRunStore.NewRun newRun = new ForecastRunStore.NewRun(companyId, config.getId(), accountId, asOf,
                 horizon.getFirst(), horizon.getLast(), balance.balanceAmount(), balance.balanceAsOf(), "LKR",
                 balanceAgeDays > parameters.balanceStaleAfterDays(), estimate.status(), quality, modelVersion,
@@ -244,6 +257,73 @@ public class ForecastService {
                 .toList();
     }
 
+    /**
+     * The inflow estimate with what it was based on: the bank transactions read (for the unclassified
+     * label and the digest), where that history starts, how many of its days a statement covers,
+     * PREVIOUS_YEAR_PATTERN details, and digest lines beyond the common inputs.
+     */
+    private record Inflows(InflowEstimate estimate, List<Transaction> transactions, LocalDate historyFrom,
+                           int coveredDays, PatternQuality pattern, String extraHashInput) {
+    }
+
+    // WEEKDAY_AVERAGE, unchanged: the lookback weeks of bank history before the balance date.
+    private Inflows weekdayInflows(Jwt user, UUID companyId, UUID accountId, LocalDate balanceDate,
+                                   List<LocalDate> horizon, List<StatementCoverage.Period> periods,
+                                   ForecastParameters parameters, InflowForecastStrategy strategy) {
+        LocalDate historyFrom = balanceDate.minusWeeks(parameters.lookbackWeeks()).plusDays(1);
+        List<Transaction> history = bankIntegrationClient.listTransactions(
+                user, companyId, accountId, historyFrom, balanceDate);
+        Set<LocalDate> covered = StatementCoverage.coveredDates(periods, historyFrom, balanceDate);
+        InflowEstimate estimate = strategy.estimate(
+                inflowHistory(historyFrom, balanceDate, covered, history), horizon, parameters);
+        return new Inflows(estimate, history, historyFrom, covered.size(), null, "");
+    }
+
+    /**
+     * PREVIOUS_YEAR_PATTERN: the growth window of bank history before the balance date, the
+     * previous-year bank history from 364 days before the growth window to 364 days before the
+     * horizon end, and approved historical sales whose receipt (sale date plus lag) falls in that
+     * previous-year range. Daily sales entered by hand are not read.
+     */
+    private Inflows previousYearInflows(Jwt user, UUID companyId, UUID accountId, LocalDate balanceDate,
+                                        List<LocalDate> horizon, List<StatementCoverage.Period> periods,
+                                        ForecastParameters parameters) {
+        LocalDate windowFrom = PreviousYearPatternStrategy.growthWindowStart(balanceDate, parameters.lookbackWeeks());
+        LocalDate referenceFrom = PreviousYearPatternStrategy.referenceDate(windowFrom);
+        LocalDate referenceTo = PreviousYearPatternStrategy.referenceDate(horizon.getLast());
+        int cashLag = parameters.cashReceiptLagDays();
+        int cardLag = parameters.cardReceiptLagDays();
+
+        List<Transaction> transactions = new ArrayList<>(bankIntegrationClient.listTransactions(
+                user, companyId, accountId, windowFrom, balanceDate));
+        transactions.addAll(bankIntegrationClient.listTransactions(
+                user, companyId, accountId, referenceFrom, referenceTo));
+        List<ApprovedSale> sales = cashManagementClient.approvedSales(user, companyId,
+                referenceFrom.minusDays(Math.max(cashLag, cardLag)), referenceTo.minusDays(Math.min(cashLag, cardLag)));
+
+        Set<LocalDate> covered = StatementCoverage.coveredDates(periods, referenceFrom, balanceDate);
+        InflowHistory bank = inflowHistory(referenceFrom, balanceDate, covered, transactions);
+        Map<LocalDate, ApprovedSale> salesByDate = new HashMap<>();
+        sales.forEach(sale -> salesByDate.put(sale.saleDate(), sale));
+        PreviousYearPatternStrategy.Result result = PreviousYearPatternStrategy.estimate(
+                new PreviousYearPatternStrategy.Inputs(balanceDate, horizon, covered, bank.cashSalesDeposits(),
+                        bank.cardSalesSettlements(), salesByDate), parameters);
+
+        StringBuilder extra = new StringBuilder()
+                .append("pattern=").append(PreviousYearPatternStrategy.REFERENCE_OFFSET_DAYS).append('|')
+                .append(parameters.lookbackWeeks()).append('|').append(parameters.minimumSamplesPerWeekday()).append('|')
+                .append(cashLag).append('|').append(cardLag).append('|')
+                .append(parameters.growthRatioWarningLow().toPlainString()).append('|')
+                .append(parameters.growthRatioWarningHigh().toPlainString()).append('\n');
+        sales.stream()
+                .sorted(Comparator.comparing(ApprovedSale::saleDate))
+                .forEach(sale -> extra.append("sale=").append(sale.saleDate()).append('|')
+                        .append(sale.cashSales().toPlainString()).append('|').append(sale.cardSales().toPlainString())
+                        .append('|').append(sale.importBatchId()).append('\n'));
+        return new Inflows(result.estimate(), transactions, referenceFrom, covered.size(), result.quality(),
+                extra.toString());
+    }
+
     private static InflowHistory inflowHistory(LocalDate from, LocalDate to, Set<LocalDate> covered,
                                                List<Transaction> transactions) {
         Map<LocalDate, BigDecimal> cash = new HashMap<>();
@@ -278,7 +358,7 @@ public class ForecastService {
      */
     private static String inputHash(String modelVersion, ForecastModelConfig config, UUID accountId, Balance balance,
                                     LocalDate today, List<StatementCoverage.Period> periods,
-                                    List<Transaction> transactions, List<ExpectedCheque> cheques) {
+                                    List<Transaction> transactions, List<ExpectedCheque> cheques, String extra) {
         StringBuilder input = new StringBuilder()
                 .append("model=").append(modelVersion).append('\n')
                 .append("config=").append(config.getId()).append(':').append(config.getVersion()).append('\n')
@@ -299,6 +379,8 @@ public class ForecastService {
                 .forEach(cheque -> input.append("cheque=").append(cheque.chequeId()).append('|')
                         .append(cheque.sourceVersion()).append('|').append(cheque.expectedClearingDate()).append('|')
                         .append(cheque.amount().toPlainString()).append('\n'));
+        // Empty for WEEKDAY_AVERAGE, so its digests are exactly what they were.
+        input.append(extra);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(input.toString().getBytes(StandardCharsets.UTF_8));

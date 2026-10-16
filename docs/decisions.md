@@ -64,6 +64,33 @@ Forecast vs Actual only (see section 10).
 - The forecast horizon is 84 days.
 - A cash shortage occurs when the projected closing balance is below LKR 0.
 
+### Forecast Method (Option B)
+
+Confirmed by the product owner (2026-10-16):
+
+- Expected sales inflows use the previous year's corresponding-week daily
+  collection pattern, adjusted by current-year actual bank-confirmed
+  collections.
+- Weekday alignment: the reference for forecast date `d` is `d - 364` days
+  (exactly 52 weeks, same weekday), never the same calendar date. Example:
+  2026-01-01 (Thursday) refers to 2025-01-02 (Thursday), which refers to
+  2024-01-04 (Thursday).
+- Growth ratio per channel (cash and card separately): current-year
+  bank-confirmed inflows over the corresponding previous-year inflows, over
+  a rolling window of corresponding weekdays (the existing 8 weeks), using
+  only comparable observations. A missing observation is never read as
+  zero; a confirmed zero is a value.
+- Expected inflow(d) = previous-year value(d - 364) x growth ratio, in
+  decimal arithmetic, rounded half-up to two places.
+- A ratio outside 0.5-2.0 is reported as a data-quality warning, not capped.
+- Without the required history the run is `INSUFFICIENT_HISTORY` (as
+  before); there is no silent fallback to `WEEKDAY_AVERAGE`.
+- Only approved historical import rows may contribute, including approved
+  zero-sales days. A day with statement coverage uses bank-confirmed
+  classified inflows instead of imported sales; the two are never added.
+  Sale dates stay separate from bank dates; a sale-to-receipt lag applies.
+  Current-year growth uses bank-confirmed inflows only, never sales records.
+
 ### Sales and Bank Transactions
 
 - Record cash and card sales after the money reaches the bank.
@@ -687,9 +714,24 @@ marked provisional are implementation decisions to review.
     approvedBy, approvedAt, approvalNote, importedRowCount,
     excludedRowCount, rejectedBy, rejectedAt, rejectionReason, version`.
   - The CSV template is built by the screen (no endpoint).
-- Approved imports produce daily sales only. Nothing is sent to other
-  services (no outbox event): no service consumes historical sales yet (see
-  Forecast Use of Historical Sales).
+- Approved imports produce daily sales. Nothing is pushed to other services
+  (no outbox event); forecast-service reads them through the sales-history
+  API below when it creates a forecast.
+
+### Approved Sales History API
+
+- `GET /api/v1/cash-management/companies/{companyId}/sales-history?from&to`
+  (sale dates, inclusive, both required, at most 800 days) →
+  `{from, to, days: [{saleDate, cashSalesAmount, cardSalesAmount,
+  importBatchId}]}`, oldest first. Only valid rows of `APPROVED` imports,
+  including days approved with zero sales (which have no `daily_sales`
+  record); pending, rejected, and invalid imports and manually entered daily
+  sales are never listed. A date without an entry is unknown, not zero.
+- Roles: `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` (the roles that
+  may create forecasts; an Accountant sees the whole company's approved
+  history here, not only their own imports); `CASHIER` and outsiders 403.
+  Read by forecast-service with the user's own token, like the bank inputs;
+  no copy of the sales history is kept in forecast-service.
 
 ## 9. Provisional Payment Rules
 
@@ -929,16 +971,63 @@ confirmed.
   never count. Because the horizon starts after the balance date, a cheque
   expected after the balance date is never dropped. Cheques expected on or
   before the balance date are not deducted and are not marked paid either.
-- Expected inflows (strategy `WEEKDAY_AVERAGE`, behind a replaceable
-  interface): for each weekday, the average of the `CASH_SALES_DEPOSIT`
+- Expected inflows use the strategy of the company's active configuration:
+  `PREVIOUS_YEAR_PATTERN` (Option B, section 4; next bullet) for every
+  company since migration V6, or `WEEKDAY_AVERAGE` for runs saved earlier.
+- `PREVIOUS_YEAR_PATTERN` (model version `2:PREVIOUS_YEAR_PATTERN`, method
+  `PREVIOUS_YEAR_CORRESPONDING_WEEK_PATTERN`), per channel (cash deposits
+  and card settlements):
+  - previous-year value(q): the `CASH_SALES_DEPOSIT`/`CARD_SALES_SETTLEMENT`
+    credits on q when an imported statement covers q; otherwise the approved
+    sale with sale date q minus the channel's receipt lag; otherwise
+    unknown. `OTHER` and `UNCLASSIFIED` never count.
+  - current-year value(c): the credits on c when a statement covers c,
+    otherwise unknown (sales records never count).
+  - growth window: the 56 days up to the balance date; a day is comparable
+    when both value(c) and value(c - 364) are known. C and P are the sums
+    over comparable days.
+  - expected(d) = value(d - 364) x C / P, rounded half-up to cents once (the
+    ratio is not rounded first). The stored ratio (C / P to 4 places) is for
+    display.
+  - `INSUFFICIENT_HISTORY` (no inflows, balances with cheques only) when a
+    weekday has fewer than 4 comparable days in either channel
+    (`NOT_ENOUGH_COMPARABLE_DAYS`), when any horizon day's reference is
+    unknown in either channel (`MISSING_REFERENCE_DAYS`), or when P is 0
+    while a reference is not (`ZERO_REFERENCE_COLLECTIONS`). P = 0 with all
+    references 0 gives 0 for that channel (no ratio needed).
+  - Warnings: `GROWTH_RATIO_OUT_OF_RANGE` (C below 0.5 x P or above 2.0 x
+    P, compared exactly), `PATTERN_FROM_SALES_HISTORY` (some previous-year
+    values came from imports). `data_quality.pattern` stores the window,
+    comparable days, ratios, source counts, lags, and the reason.
+  - Inputs read: bank transactions of the growth window and of the
+    previous-year range (364 days before the window start to 364 days
+    before the horizon end), statement coverage, and approved sales for the
+    sale dates whose receipts fall in that range. The input digest adds the
+    pattern parameters and every approved sale (date, cash, card, batch ID)
+    to the common inputs, so any change gives a new run.
+  - Configuration: `lookbackWeeks` 8 (growth window),
+    `minimumSamplesPerWeekday` 4, `cashReceiptLagDays` 1,
+    `cardReceiptLagDays` 1, `growthRatioWarningLow` 0.5,
+    `growthRatioWarningHigh` 2.0, stored in the configuration and its
+    snapshot.
+- `WEEKDAY_AVERAGE` (model version `1:WEEKDAY_AVERAGE`, kept unchanged for
+  older configurations): for each weekday, the average of the `CASH_SALES_DEPOSIT`
   credits, and separately of the `CARD_SALES_SETTLEMENT` credits, on the same
   weekday in the 8 weeks up to the balance date, by actual transaction date,
   rounded half-up to cents. Only days covered by an imported statement are
   averaged; a covered day without such credits counts as 0, an uncovered day
   is left out. `OTHER` and `UNCLASSIFIED` transactions are never counted.
-- If any weekday has fewer than 4 statement-covered days in that window, no
-  inflows are estimated: the run is `INSUFFICIENT_HISTORY`, inflow amounts
-  are null, and balances include cheque payments only.
+- `WEEKDAY_AVERAGE`: if any weekday has fewer than 4 statement-covered days
+  in that window, no inflows are estimated: the run is
+  `INSUFFICIENT_HISTORY`, inflow amounts are null, and balances include
+  cheque payments only.
+- Migration `V6__activate_previous_year_pattern_configs.sql` (additive data
+  change): each company whose active configuration was `WEEKDAY_AVERAGE` got
+  a new active version with the `PREVIOUS_YEAR_PATTERN` defaults (created by
+  the nil UUID, meaning the migration); the old version is only deactivated.
+  Saved runs keep their configuration reference, snapshot, model version,
+  digest, results, and Forecast vs Actual. New companies get
+  `PREVIOUS_YEAR_PATTERN` on their first run.
 - Labels shown with each run: `BALANCE_STALE` when the balance is more than
   3 days older than the day of the run (the forecast still starts from it);
   `INSUFFICIENT_HISTORY`; and `INCOMPLETE_CLASSIFICATION` when the history
@@ -1173,27 +1262,19 @@ stored but not used by forecast calculations yet.
 - VERIFIED is a statement about the time of the check. Later changes are
   not tracked against it; forecasts bound its age (next section).
 
-### Forecast Use of Historical Sales (blocked)
+### Forecast Use of Historical Sales
 
-- Traced: forecast-service reads no sales data. Its inflow estimate
-  (`WEEKDAY_AVERAGE`) averages `CASH_SALES_DEPOSIT` and
-  `CARD_SALES_SETTLEMENT` bank credits by bank transaction date, and Forecast
-  vs Actual uses the same bank credits as actuals. Daily sales, entered or
-  imported, reach no forecast.
-- Not implemented, deliberately: turning approved historical sales (by sale
-  date) into expected receipts (by deposit or settlement date) needs rules
-  that are not confirmed (section 13): which method uses them (the business
-  direction mentions current-year actuals and last year's corresponding
-  pattern), how sale dates map to deposit and card-settlement dates, how
-  periods covered by both sales records and bank history are combined
-  without double-counting, and what minimum history applies. Inventing these
-  would change financial results. Saved runs, the input digest, and Forecast
-  vs Actual are therefore unchanged, and imported sales can never become
-  actual inflows.
-- When the rules are confirmed, the intended path is an approved-import
-  event from cash-management-service through its own outbox (schema
-  section 4.5) into a forecast-owned sales history, with the source version
-  in the run's input digest; no cross-service database access.
+- Approved historical sales reach the forecast only as previous-year
+  reference values in `PREVIOUS_YEAR_PATTERN` (Calculation, above), read
+  from cash-management-service's sales-history API at forecast time. They
+  never become actual inflows: Forecast vs Actual and the actual balance use
+  bank transactions only, and a day with statement coverage ignores
+  imported sales.
+- Assumption (provisional, configurable): cash sales are deposited 1 day
+  after the sale date and card sales settled 1 day after; the only source is
+  the example in section 8 (sales of 3 October credited on 4 October). A
+  different lag shifts expected inflows between days but not their weekly
+  total.
 
 ### Forecast Cheque Source
 
@@ -1251,6 +1332,9 @@ Confirmed for Feature 2, milestone 4.
 
 ### Known Limitations
 
+- A `PREVIOUS_YEAR_PATTERN` forecast also needs cash-management-service
+  (approved sales history, fail closed with 503) and a second bank
+  transaction range of about 20 weeks a year earlier.
 - A forecast needs four synchronous calls to bank-integration-service, the
   identity check, and (with the default maximum age) a cheque verification
   that calls payment-service's internal summary and RabbitMQ; it is
@@ -1510,11 +1594,14 @@ The following must be researched or agreed before implementation:
   bank corrections or reversals of imported rows are handled.
 - Whether `ACCOUNTANT` may classify transactions, and whether automatic
   classification rules (`RULE`, `BANK_METADATA`) will be introduced.
-- The forecasting method for sales inflows. The business direction mentions
-  current-year actual collections and the previous year's corresponding
-  weekly or daily pattern; the calculation, lookback, minimum history, and
-  fallback when history is missing are not confirmed. The current
-  `WEEKDAY_AVERAGE` strategy is a placeholder behind a replaceable interface.
+- Option B details still provisional: the cash and card receipt lags (1 day
+  each); requiring every horizon day's reference (one unknown day gives
+  `INSUFFICIENT_HISTORY` for the whole run); 4 comparable days per weekday;
+  treating P = 0 with zero references as zero inflow; no adjustment for
+  public holidays or Poya days that move between years; and the schema
+  document's note to forecast from bank patterns "rather than a separate
+  Forecast copy of Sales history", which approved imports now supplement
+  (read, not copied).
 - Whether a forecast may run from a stale balance (currently it runs and is
   labelled), and the stale threshold.
 - Whether the horizon should start the day after the balance date (current)
@@ -1545,9 +1632,8 @@ The following must be researched or agreed before implementation:
   corrected or reversed; whether a manual daily sale may later be entered for
   a day an approved import recorded as zero; and how users' names reach the
   screen.
-- How approved historical sales feed the forecast (Forecast Use of
-  Historical Sales): method, sale-to-deposit mapping, overlap with bank
-  history, and minimum history.
+- Whether a company should be able to choose `WEEKDAY_AVERAGE` again, and an
+  API to change forecast configuration.
 - The sample bank statement in the bank-integration test resources contains
   personal data (names, a phone number, deposit references) and is already
   in the Git history; whether to replace it with an anonymized fixture and

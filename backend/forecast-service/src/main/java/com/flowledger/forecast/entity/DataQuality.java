@@ -1,5 +1,7 @@
 package com.flowledger.forecast.entity;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -16,6 +18,8 @@ import java.util.Map;
  * @param unclassifiedCreditCount   UNCLASSIFIED credits in the history; they may hide sales inflows
  * @param unclassifiedCreditAmount  their total
  * @param balanceAgeDays            days between the balance date and the day of the run
+ * @param pattern                   PREVIOUS_YEAR_PATTERN details; absent (not stored) for other methods
+ *                                  and for runs saved before it existed
  */
 public record DataQuality(
         LocalDate historyFrom,
@@ -26,6 +30,8 @@ public record DataQuality(
         int unclassifiedCreditCount,
         BigDecimal unclassifiedCreditAmount,
         long balanceAgeDays,
-        int balanceStaleAfterDays
+        int balanceStaleAfterDays,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        PatternQuality pattern
 ) {
 }

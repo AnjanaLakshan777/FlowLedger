@@ -1,5 +1,6 @@
 package com.flowledger.forecast.repository;
 
+import com.flowledger.forecast.support.ForecastConfigs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -311,6 +312,45 @@ class ForecastMigrationTest {
 
         assertThatThrownBy(() -> insertVerification(status, reason, runId, deadLetters, paymentCount, verifiedAt))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // V6 is already applied; its script is run again here, inside this rolled-back transaction, on
+    // companies made for the test.
+    @Test
+    void shouldMoveWeekdayAverageCompaniesToANewPreviousYearPatternVersion() throws Exception {
+        assertThat(jdbcTemplate.queryForObject("SELECT success FROM flyway_schema_history WHERE script = ?",
+                Boolean.class, "V6__activate_previous_year_pattern_configs.sql")).isTrue();
+        UUID weekdayCompany = UUID.randomUUID();
+        UUID oldConfig = ForecastConfigs.weekdayAverage(jdbcTemplate, weekdayCompany);
+        String oldParameters = jdbcTemplate.queryForObject(
+                "SELECT parameters::text FROM forecast_model_configs WHERE id = ?", String.class, oldConfig);
+        UUID patternCompany = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO forecast_model_configs (company_id, version, is_active, horizon_days, method_code, parameters,
+                                                    created_by)
+                VALUES (?, 3, true, 84, 'PREVIOUS_YEAR_CORRESPONDING_WEEK_PATTERN', '{"strategy": "PREVIOUS_YEAR_PATTERN"}', ?)
+                """, patternCompany, UUID.randomUUID());
+
+        String script;
+        try (var in = getClass().getResourceAsStream("/db/migration/V6__activate_previous_year_pattern_configs.sql")) {
+            script = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        jdbcTemplate.execute(script);
+
+        Map<String, Object> old = jdbcTemplate.queryForMap(
+                "SELECT is_active, parameters::text AS parameters FROM forecast_model_configs WHERE id = ?", oldConfig);
+        assertThat(old).containsEntry("is_active", false).containsEntry("parameters", oldParameters);
+        Map<String, Object> active = jdbcTemplate.queryForMap("""
+                SELECT version, method_code, parameters ->> 'strategy' AS strategy, parameters ->> 'cashReceiptLagDays' AS lag,
+                       created_by
+                FROM forecast_model_configs WHERE company_id = ? AND is_active
+                """, weekdayCompany);
+        assertThat(active).containsEntry("version", 2).containsEntry("strategy", "PREVIOUS_YEAR_PATTERN")
+                .containsEntry("method_code", "PREVIOUS_YEAR_CORRESPONDING_WEEK_PATTERN").containsEntry("lag", "1")
+                .containsEntry("created_by", new UUID(0, 0));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM forecast_model_configs WHERE company_id = ?", Integer.class, patternCompany))
+                .isEqualTo(1);
     }
 
     private UUID completedBackfillRun() {
