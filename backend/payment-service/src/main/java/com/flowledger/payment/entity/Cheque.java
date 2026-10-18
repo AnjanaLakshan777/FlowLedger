@@ -51,6 +51,10 @@ public class Cheque {
     @Column(name = "category", nullable = false, length = 32)
     private ChequeCategory category;
 
+    // What an OTHER_EXPENSES payment was, as the user wrote it; null for every other category.
+    @Column(name = "other_description", length = 120)
+    private String otherDescription;
+
     @Column(name = "amount", nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
@@ -121,6 +125,7 @@ public class Cheque {
         snapshot.put("chequeNumber", chequeNumber);
         snapshot.put("payeeName", payeeName);
         snapshot.put("category", category.name());
+        snapshot.put("otherDescription", otherDescription);
         snapshot.put("amount", amount.toPlainString());
         snapshot.put("issueDate", issueDate.toString());
         snapshot.put("expectedClearingDate", expectedClearingDate.toString());
@@ -132,13 +137,15 @@ public class Cheque {
     }
 
     private ChequeDetails currentDetails() {
-        return new ChequeDetails(chequeNumber, payeeName, category, amount, issueDate, expectedClearingDate, notes);
+        return new ChequeDetails(chequeNumber, payeeName, category, otherDescription, amount, issueDate,
+                expectedClearingDate, notes);
     }
 
     private void apply(ChequeDetails details) {
         this.chequeNumber = details.chequeNumber();
         this.payeeName = details.payeeName();
         this.category = details.category();
+        this.otherDescription = details.otherDescription();
         this.amount = details.amount();
         this.issueDate = details.issueDate();
         this.expectedClearingDate = details.expectedClearingDate();

@@ -5,6 +5,7 @@ import com.flowledger.payment.dto.CancelChequeRequest;
 import com.flowledger.payment.dto.ChequeRequest;
 import com.flowledger.payment.dto.ChequeResponse;
 import com.flowledger.payment.entity.Cheque;
+import com.flowledger.payment.entity.ChequeCategory;
 import com.flowledger.payment.entity.ChequeDetails;
 import com.flowledger.payment.entity.ChequeStatus;
 import com.flowledger.payment.entity.OutboxEvent;
@@ -171,11 +172,25 @@ public class ChequeService {
                 request.chequeNumber(),
                 request.payeeName().trim(),
                 request.category(),
+                otherDescription(request),
                 request.amount(),
                 request.issueDate(),
                 request.expectedClearingDate(),
                 request.notes() == null || request.notes().isBlank() ? null : request.notes().trim()
         );
+    }
+
+    // An OTHER_EXPENSES cheque must say what the payment was, so it reads as "Other Expenses - Audit fee".
+    // The description is kept only for that category.
+    private static String otherDescription(ChequeRequest request) {
+        if (request.category() != ChequeCategory.OTHER_EXPENSES) {
+            return null;
+        }
+        if (request.otherDescription() == null || request.otherDescription().isBlank()) {
+            throw new InvalidChequeException("otherDescription",
+                    "otherDescription is required when the category is OTHER_EXPENSES");
+        }
+        return request.otherDescription().strip();
     }
 
     private Cheque changeableCheque(UUID companyId, UUID chequeId, int expectedVersion) {
@@ -210,6 +225,7 @@ public class ChequeService {
         Map<String, Object> payload = cheque.snapshot();
         payload.remove("payeeName");
         payload.remove("notes");
+        payload.remove("otherDescription");
         payload.put("chequeId", cheque.getId().toString());
         payload.put("companyId", cheque.getCompanyId().toString());
         outboxEventRepository.save(new OutboxEvent(AGGREGATE_TYPE, cheque.getId(), eventType, payload));

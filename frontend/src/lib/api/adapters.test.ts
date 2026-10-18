@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { colomboLocal, colomboToday, forecastFromRun, forecastVsActualWeeks, toBankAccount, toCheque, toDailySale, toTransaction } from "./adapters"
+import { colomboLocal, colomboToday, forecastFromRun, forecastVsActualWeeks, toBankAccount, toCheque, toChequeRequest, toDailySale, toTransaction } from "./adapters"
 import type { ApiBankAccount, ForecastRun, ForecastRunDay, ForecastVsActual } from "./flowledger"
 
 // Shapes as the services return them (taken from the end-to-end run; fictional test data).
@@ -47,7 +47,7 @@ describe("forecast runs", () => {
   it("places cheques of the run on their clearing date, with payees from the payment service", () => {
     const days = dates("2026-10-01", 84).map((d) => day(d, d === "2026-10-20" ? { expectedChequeOutflows: 20000, expectedChequeCount: 1, closingBalance: -19900, cashShortage: true } : {}))
     const r = { ...run({}, days), cheques: [{ chequeId: "c1", chequeNumber: "100001", amount: 20000, expectedClearingDate: "2026-10-20" }] }
-    const cheques = [toCheque({ id: "c1", bankAccountId: "acc", chequeNumber: "100001", payeeName: "E2E Supplier", category: "SUPPLIER_PAYMENT", amount: 20000,
+    const cheques = [toCheque({ id: "c1", bankAccountId: "acc", chequeNumber: "100001", payeeName: "E2E Supplier", category: "SUPPLIER_PAYMENT", otherDescription: null, amount: 20000,
       issueDate: "2026-10-15", expectedClearingDate: "2026-10-20", status: "ISSUED", notes: null, version: 1 })]
     const f = forecastFromRun(r, cheques)
     const d20 = f.days.find((d) => d.date === "2026-10-20")!
@@ -65,9 +65,17 @@ describe("records", () => {
   })
 
   it("maps cheque statuses without a paid status", () => {
-    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", category: "TAX" as const, amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", notes: null, version: 2 }
+    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", category: "TAX" as const, otherDescription: null, amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", notes: null, version: 2 }
     expect(toCheque({ ...base, status: "ISSUED" })).toMatchObject({ status: "Scheduled", cheque_no: "000123", category: "Tax", version: 2 })
     expect(toCheque({ ...base, status: "CANCELLED" }).status).toBe("Cancelled")
+  })
+
+  it("sends an Other Expenses description and drops it for other categories", () => {
+    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", status: "ISSUED" as const, notes: null, version: 2 }
+    const other = toCheque({ ...base, category: "OTHER_EXPENSES", otherDescription: "Audit fee" })
+    expect(other).toMatchObject({ category: "Other Expenses", other_description: "Audit fee" })
+    expect(toChequeRequest(other).otherDescription).toBe("Audit fee")
+    expect(toChequeRequest({ ...other, category: "Tax" }).otherDescription).toBeNull()
   })
 
   it("signs bank transactions and keeps their category", () => {

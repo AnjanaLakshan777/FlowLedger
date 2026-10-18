@@ -9,6 +9,8 @@ public record ChequeDetails(
         String chequeNumber,
         String payeeName,
         ChequeCategory category,
+        // What an OTHER_EXPENSES payment was; null for every other category.
+        String otherDescription,
         BigDecimal amount,
         LocalDate issueDate,
         LocalDate expectedClearingDate,

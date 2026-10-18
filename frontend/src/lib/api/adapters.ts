@@ -47,14 +47,15 @@ const CALENDAR_TYPE: Partial<Record<TransactionCategory, string>> = {
 
 export function toCheque(c: ApiCheque): Cheque {
   return {
-    id: c.id, version: c.version, cheque_no: c.chequeNumber, payee: c.payeeName, category: CHEQUE_CATEGORY[c.category], amount: c.amount,
-    cheque_date: c.issueDate, expected_clear_date: c.expectedClearingDate, status: c.status === "CANCELLED" ? "Cancelled" : "Scheduled",
+    id: c.id, version: c.version, cheque_no: c.chequeNumber, payee: c.payeeName, category: CHEQUE_CATEGORY[c.category],
+    other_description: c.otherDescription ?? "", amount: c.amount, cheque_date: c.issueDate, expected_clear_date: c.expectedClearingDate, status: c.status === "CANCELLED" ? "Cancelled" : "Scheduled",
     notes: c.notes ?? "",
   }
 }
 
 export const toChequeRequest = (c: Cheque): ChequeRequest => ({
-  chequeNumber: c.cheque_no, payeeName: c.payee, category: API_CHEQUE_CATEGORY[c.category], amount: c.amount, issueDate: c.cheque_date,
+  chequeNumber: c.cheque_no, payeeName: c.payee, category: API_CHEQUE_CATEGORY[c.category],
+  otherDescription: c.category === "Other Expenses" ? c.other_description?.trim() || null : null, amount: c.amount, issueDate: c.cheque_date,
   expectedClearingDate: c.expected_clear_date, notes: c.notes.trim() || null, version: c.version,
 })
 

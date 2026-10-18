@@ -190,6 +190,34 @@ class ChequeControllerIntegrationTest {
     }
 
     @Test
+    void shouldRequireAndKeepTheDescriptionOfAnOtherExpensesCheque() throws Exception {
+        add(requestJson(Map.of("category", "OTHER_EXPENSES")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.otherDescription")
+                        .value("otherDescription is required when the category is OTHER_EXPENSES"));
+        add(requestJson(Map.of("category", "OTHER_EXPENSES", "otherDescription", "   ")))
+                .andExpect(status().isBadRequest());
+        add(requestJson(Map.of("category", "OTHER_EXPENSES", "otherDescription", "A".repeat(121))))
+                .andExpect(jsonPath("$.errors.otherDescription").value("otherDescription must be at most 120 characters"));
+        assertThat(countCheques(companyId)).isZero();
+
+        String body = add(requestJson(Map.of("category", "OTHER_EXPENSES", "otherDescription", "  Audit fee ")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.otherDescription").value("Audit fee"))
+                .andReturn().getResponse().getContentAsString();
+        UUID chequeId = UUID.fromString(JsonPath.read(body, "$.id"));
+
+        // The description is free text, so it stays out of the outbox event like the payee and notes.
+        assertThat(outboxEvents(chequeId).getFirst().get("payload").toString()).doesNotContain("Audit fee");
+
+        // Another category drops the description.
+        update(chequeId, requestJson(Map.of("category", "TAX", "otherDescription", "Audit fee", "version", 1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.category").value("TAX"))
+                .andExpect(jsonPath("$.otherDescription").doesNotExist());
+    }
+
+    @Test
     void shouldRejectUnknownCategory() throws Exception {
         add(requestJson(Map.of("category", "RENT"))).andExpect(status().isBadRequest());
         assertThat(countCheques(companyId)).isZero();

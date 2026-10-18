@@ -51,12 +51,16 @@ export interface ApiTransaction {
 export type ApiChequeCategory = "SUPPLIER_PAYMENT" | "SALARY" | "TAX" | "OTHER_EXPENSES"
 
 export interface ApiCheque {
-  id: string; bankAccountId: string; chequeNumber: string; payeeName: string; category: ApiChequeCategory; amount: number
+  id: string; bankAccountId: string; chequeNumber: string; payeeName: string; category: ApiChequeCategory
+  /** What an OTHER_EXPENSES cheque was; null for every other category. */
+  otherDescription: string | null; amount: number
   issueDate: string; expectedClearingDate: string; status: "ISSUED" | "CANCELLED"; notes: string | null; version: number
 }
 
 export interface ChequeRequest {
-  chequeNumber: string; payeeName: string; category: ApiChequeCategory; amount: number; issueDate: string
+  chequeNumber: string; payeeName: string; category: ApiChequeCategory
+  /** Required for OTHER_EXPENSES: what the payment was. */
+  otherDescription: string | null; amount: number; issueDate: string
   expectedClearingDate: string; notes: string | null; version?: number
 }
 

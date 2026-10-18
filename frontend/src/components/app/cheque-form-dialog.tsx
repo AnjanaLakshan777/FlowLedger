@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import type { Cheque } from "@/data/types"
 import { lkDate } from "@/lib/calendar"
-import { CHEQUE_CATEGORIES, toCheque, validateCheque, type ChequeErrors, type ChequeInput } from "@/lib/cheques"
+import { CHEQUE_CATEGORIES, OTHER_CHEQUE_CATEGORY, toCheque, validateCheque, type ChequeErrors, type ChequeInput } from "@/lib/cheques"
 import { fmt, parseAmount } from "@/lib/format"
 import { useAppState } from "./app-state"
 import { Field } from "./field"
@@ -17,11 +17,11 @@ import { MoneyInput } from "./money-input"
 type Form = Omit<ChequeInput, "amount"> & { amount: string }
 
 const fromCheque = (c: Cheque): Form => ({
-  category: c.category, payee: c.payee, amount: fmt.amt(c.amount), cheque_no: c.cheque_no, cheque_date: c.cheque_date,
+  category: c.category, other_description: c.other_description ?? "", payee: c.payee, amount: fmt.amt(c.amount), cheque_no: c.cheque_no, cheque_date: c.cheque_date,
   expected_clear_date: c.expected_clear_date, notes: c.notes,
 })
 const blank = (date: string): Form => ({
-  category: "", payee: "", amount: "", cheque_no: "", cheque_date: date, expected_clear_date: "", notes: "",
+  category: "", other_description: "", payee: "", amount: "", cheque_no: "", cheque_date: date, expected_clear_date: "", notes: "",
 })
 
 /**
@@ -91,6 +91,11 @@ export function ChequeFormDialog({ open, onOpenChange, cheque, defaultDate, onSa
               <SelectContent>{CHEQUE_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
+          {f.category === OTHER_CHEQUE_CATEGORY && (
+            <Field label="What is this payment?" htmlFor="chq-other" error={errors.other_description} help="Shown as Other Expenses - your text" className="sm:col-span-2">
+              <Input id="chq-other" maxLength={120} placeholder="e.g. Audit fee" value={f.other_description} onChange={(e) => set("other_description", e.target.value)} aria-invalid={!!errors.other_description || undefined} autoFocus />
+            </Field>
+          )}
           <Field label="Cheque issue date" htmlFor="chq-date" error={errors.cheque_date} help={f.cheque_date ? `${asLk(f.cheque_date)} · when the cheque is written` : "When the cheque is written"}>
             <Input id="chq-date" type="date" value={f.cheque_date} onChange={(e) => set("cheque_date", e.target.value)} aria-invalid={!!errors.cheque_date || undefined} />
           </Field>

@@ -69,7 +69,7 @@ class ChequeServiceTest {
     }
 
     private static ChequeRequest request(LocalDate clearingDate) {
-        return new ChequeRequest("000123", "Lanka Tiles", ChequeCategory.TAX, new BigDecimal("1000.00"),
+        return new ChequeRequest("000123", "Lanka Tiles", ChequeCategory.TAX, null, new BigDecimal("1000.00"),
                 LocalDate.of(2026, 10, 10), clearingDate, null, null);
     }
 

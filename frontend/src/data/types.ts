@@ -32,6 +32,8 @@ export interface Cheque {
   /** Backend ID and version; set for cheques loaded from the payment service. */
   id?: string; version?: number
   cheque_no: string; payee: string; category: ChequeCategory; amount: number; cheque_date: string
+  /** What an "Other Expenses" payment was, e.g. "Audit fee"; empty or missing for every other category. */
+  other_description?: string
   /** The forecast deducts the amount on this date (never on the cheque date). */
   expected_clear_date: string
   status: ChequeStatus; notes: string

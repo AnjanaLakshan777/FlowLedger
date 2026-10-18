@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Cheque } from "@/data/types"
-import { toCheque, upsertCheque, validateCheque, type ChequeInput } from "./cheques"
+import { chequeCategoryText, toCheque, upsertCheque, validateCheque, type ChequeInput } from "./cheques"
 import { buildForecast } from "./forecast"
 
 const TODAY = "2026-10-10"
@@ -9,7 +9,7 @@ const existing: Cheque[] = [{
   expected_clear_date: "2026-10-26", status: "Scheduled", notes: "",
 }]
 const input = (over: Partial<ChequeInput> = {}): ChequeInput => ({
-  category: "Supplier Payment", payee: "Test Supplier", amount: 500_000, cheque_no: "009901", cheque_date: "2026-10-21",
+  category: "Supplier Payment", other_description: "", payee: "Test Supplier", amount: 500_000, cheque_no: "009901", cheque_date: "2026-10-21",
   expected_clear_date: "2026-10-23", notes: "", ...over,
 })
 
@@ -23,6 +23,11 @@ describe("validateCheque", () => {
   })
   it("rejects zero, negative and missing amounts", () => {
     for (const amount of [0, -1, null, Number.NaN]) expect(validateCheque(input({ amount }), existing, TODAY).amount).toBeDefined()
+  })
+  it("requires an Other Expenses cheque to say what the payment is", () => {
+    expect(validateCheque(input({ category: "Other Expenses" }), existing, TODAY).other_description).toMatch(/Audit fee/)
+    expect(validateCheque(input({ category: "Other Expenses", other_description: "  " }), existing, TODAY).other_description).toBeDefined()
+    expect(validateCheque(input({ category: "Other Expenses", other_description: "Audit fee" }), existing, TODAY)).toEqual({})
   })
   it("rejects invalid dates", () => {
     expect(validateCheque(input({ cheque_date: "2026-02-30" }), existing, TODAY).cheque_date).toBeDefined()
@@ -43,6 +48,13 @@ describe("validateCheque", () => {
 describe("adding and editing cheques", () => {
   it("stores a scheduled future payment with its expected clearing date", () => {
     expect(toCheque(input())).toMatchObject({ status: "Scheduled", cheque_date: "2026-10-21", expected_clear_date: "2026-10-23" })
+  })
+  it("shows an Other Expenses cheque as Other Expenses - its description, and keeps the description only for that category", () => {
+    const other = toCheque(input({ category: "Other Expenses", other_description: " Audit fee " }))
+    expect(chequeCategoryText(other)).toBe("Other Expenses - Audit fee")
+    const tax = toCheque(input({ category: "Tax", other_description: "Audit fee" }))
+    expect(tax.other_description).toBe("")
+    expect(chequeCategoryText(tax)).toBe("Tax")
   })
   it("adds a new cheque", () => {
     expect(upsertCheque(existing, toCheque(input())).map((c) => c.cheque_no)).toEqual(["004535", "009901"])

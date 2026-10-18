@@ -2,12 +2,18 @@ import type { Cheque, ChequeCategory } from "@/data/types"
 import { parseDate } from "./format"
 
 export const CHEQUE_CATEGORIES: ChequeCategory[] = ["Supplier Payment", "Salary", "Tax", "Other Expenses"]
+/** The category that must say what the payment was. */
+export const OTHER_CHEQUE_CATEGORY: ChequeCategory = "Other Expenses"
+
+/** "Other Expenses - Audit fee" for an Other Expenses cheque with a description; otherwise the category. */
+export const chequeCategoryText = (c: Pick<Cheque, "category" | "other_description">) =>
+  c.category === OTHER_CHEQUE_CATEGORY && c.other_description ? `${c.category} - ${c.other_description}` : c.category
 
 /** What the Finance Controller enters for a future cheque payment. */
 export interface ChequeInput {
-  category: string; payee: string; amount: number | null; cheque_no: string; cheque_date: string; expected_clear_date: string; notes: string
+  category: string; other_description: string; payee: string; amount: number | null; cheque_no: string; cheque_date: string; expected_clear_date: string; notes: string
 }
-export type ChequeErrors = Partial<Record<"category" | "payee" | "amount" | "cheque_no" | "cheque_date" | "expected_clear_date", string>>
+export type ChequeErrors = Partial<Record<"category" | "other_description" | "payee" | "amount" | "cheque_no" | "cheque_date" | "expected_clear_date", string>>
 
 const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(parseDate(s).getTime()) && parseDate(s).toISOString().slice(0, 10) === s
 
@@ -28,6 +34,8 @@ export const paymentState = (c: Cheque, today: string) => (c.status !== "Schedul
 export function validateCheque(f: ChequeInput, existing: Cheque[], today: string, originalNo?: string): ChequeErrors {
   const e: ChequeErrors = {}
   if (!CHEQUE_CATEGORIES.includes(f.category as ChequeCategory)) e.category = "Choose a payment category."
+  else if (f.category === OTHER_CHEQUE_CATEGORY && !f.other_description.trim()) e.other_description = "Say what this payment is, for example Audit fee."
+  else if (f.category === OTHER_CHEQUE_CATEGORY && f.other_description.trim().length > 120) e.other_description = "Keep it to 120 characters or fewer."
   if (!f.payee.trim()) e.payee = "Enter the payee."
   if (f.amount == null || Number.isNaN(f.amount) || f.amount <= 0) e.amount = "Enter an amount greater than 0."
   if (!/^\d{6}$/.test(f.cheque_no)) e.cheque_no = "Enter the 6-digit cheque number."
@@ -41,7 +49,8 @@ export function validateCheque(f: ChequeInput, existing: Cheque[], today: string
 
 /** Builds the stored cheque (a scheduled future payment). */
 export const toCheque = (f: ChequeInput, base?: Cheque): Cheque => ({
-  cheque_no: f.cheque_no, payee: f.payee.trim(), category: f.category as ChequeCategory, amount: f.amount!, cheque_date: f.cheque_date,
+  cheque_no: f.cheque_no, payee: f.payee.trim(), category: f.category as ChequeCategory,
+  other_description: f.category === OTHER_CHEQUE_CATEGORY ? f.other_description.trim() : "", amount: f.amount!, cheque_date: f.cheque_date,
   expected_clear_date: f.expected_clear_date, status: base?.status ?? "Scheduled", notes: f.notes,
 })
 

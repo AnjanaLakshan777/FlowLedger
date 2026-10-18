@@ -16,7 +16,7 @@ import { PageHeader } from "@/components/app/page-header"
 import { SearchInput } from "@/components/app/search-input"
 import { StatusBadge } from "@/components/app/status-badge"
 import type { Cheque } from "@/data/types"
-import { CHEQUE_CATEGORIES, isPastClearingDate, isUpcoming, paymentState } from "@/lib/cheques"
+import { CHEQUE_CATEGORIES, chequeCategoryText, isPastClearingDate, isUpcoming, paymentState } from "@/lib/cheques"
 import { fmt, sum } from "@/lib/format"
 
 /**
@@ -50,7 +50,7 @@ export default function ChequesPage() {
     return cheques.filter((c) =>
       (show === "all" || (show === "upcoming" ? isUpcoming(c, today) : show === "past" ? isPastClearingDate(c, today) : c.status === show)) &&
       (cat === "all" || c.category === cat) && (!from || c.expected_clear_date >= from) && (!to || c.expected_clear_date <= to) &&
-      (!s || [c.cheque_no, c.payee, c.notes, fmt.amt(c.amount)].join(" ").toLowerCase().includes(s)))
+      (!s || [c.cheque_no, c.payee, c.notes, c.other_description ?? "", fmt.amt(c.amount)].join(" ").toLowerCase().includes(s)))
   }, [cheques, show, cat, q, from, to, today])
 
   return (
@@ -111,7 +111,7 @@ export default function ChequesPage() {
           columns={[
             { key: "no", header: "Cheque no.", sortValue: (r) => r.cheque_no, cell: (r) => <span className="font-mono text-xs">{r.cheque_no}</span> },
             { key: "payee", header: "Payee", sortValue: (r) => r.payee, cell: (r) => <CellStack className="min-w-44" main={r.payee} sub={r.notes} /> },
-            { key: "cat", header: "Category", sortValue: (r) => r.category, cell: (r) => <span className="whitespace-nowrap">{r.category}</span> },
+            { key: "cat", header: "Category", sortValue: (r) => chequeCategoryText(r), cell: (r) => <span className="whitespace-nowrap">{chequeCategoryText(r)}</span> },
             { key: "amount", header: "Amount (LKR)", numeric: true, sortValue: (r) => r.amount, cell: (r) => <b className="font-semibold">{fmt.amt(r.amount)}</b> },
             { key: "date", header: "Issue date", sortValue: (r) => r.cheque_date, cell: (r) => <span className="whitespace-nowrap">{fmt.short(r.cheque_date)}</span> },
             { key: "clears", header: "Expected clearing", sortValue: (r) => r.expected_clear_date, cell: (r) => <span className="whitespace-nowrap">{fmt.day(r.expected_clear_date)}</span> },

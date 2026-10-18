@@ -174,6 +174,13 @@ Confirmed by the product owner on 2026-10-15:
 - Every cheque has a payment category: Supplier Payment, Salary, Tax, or
   Other Expenses, as in the finalized UI. This adds a `category` column that
   schema document v1 does not have.
+- An Other Expenses cheque must say what the payment was
+  (`otherDescription`, at most 120 characters; 400 without it), and is shown
+  as "Other Expenses - <description>", for example "Other Expenses - Audit
+  fee". It is cleared when another category is chosen and is not in cheque
+  events, like the payee and notes. `V3__add_cheque_other_description.sql`
+  adds the column; Other Expenses cheques recorded earlier have none until
+  they are edited.
 - Cheques are drawn on the company's active current account. The server finds
   it in `bank-integration-service`; clients do not send a bank account.
 - Cancelling a cheque requires a reason, recorded with the actor in the

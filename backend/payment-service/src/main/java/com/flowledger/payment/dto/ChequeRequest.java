@@ -28,6 +28,10 @@ public record ChequeRequest(
         @NotNull(message = "category is required")
         ChequeCategory category,
 
+        // Required for OTHER_EXPENSES (checked by the service) and ignored for other categories.
+        @Size(max = 120, message = "otherDescription must be at most 120 characters")
+        String otherDescription,
+
         @NotNull(message = "amount is required")
         @DecimalMin(value = "0.01", message = "amount must be greater than 0")
         @Digits(integer = 17, fraction = 2,
