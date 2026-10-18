@@ -3,10 +3,8 @@ package com.flowledger.payment.outbox;
 import java.util.Map;
 import java.util.Optional;
 
-/** Where each payment event is published: the flowledger.payment topic exchange and a routing key per type. */
+/** The routing key each payment event is published with, on the exchange named by flowledger.outbox.exchange. */
 public final class OutboxRoutes {
-
-    public static final String EXCHANGE = "flowledger.payment";
 
     private static final Map<String, String> ROUTING_KEYS = Map.of(
             "ChequeIssued", "cheque.issued",

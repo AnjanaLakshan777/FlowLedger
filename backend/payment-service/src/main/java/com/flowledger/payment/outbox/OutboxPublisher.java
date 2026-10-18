@@ -91,7 +91,7 @@ public class OutboxPublisher {
 
         CorrelationData correlation = new CorrelationData(event.id().toString());
         try {
-            rabbitTemplate.send(OutboxRoutes.EXCHANGE, routingKey.get(), message(event), correlation);
+            rabbitTemplate.send(properties.exchange(), routingKey.get(), message(event), correlation);
         } catch (AmqpException e) {
             return Optional.of(sanitize("Broker unavailable", e));
         }

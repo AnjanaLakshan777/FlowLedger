@@ -1599,7 +1599,18 @@ retry; the frontend never falls back to demonstration data.
   forecast-service's backfill refuses to start; nothing else needs it.
 - `CHEQUE_BACKFILL_ON_STARTUP` (forecast-service, default `false`): start
   or resume the cheque backfill after startup, and verify the projection
-  once the run completes.
+  once the run completes. `.env.example` sets it to `true` for local
+  development, since a forecast is refused until one backfill has
+  completed; a new run on every start changes nothing that is current.
+- Test isolation (payment-service): tests use the database
+  `flowledger_payment_test` (`PAYMENT_TEST_DB_URL`) and the exchange
+  `flowledger.payment.test` (`flowledger.outbox.exchange`, default
+  `flowledger.payment`). Sharing the development database let a locally
+  running payment-service publish the tests' incomplete outbox rows, and the
+  tests published to the real exchange themselves. Both reached
+  forecast-service's dead-letter queue, which blocks every forecast
+  (`DEAD_LETTERS_PRESENT`). `compose.yaml` creates the test database on a new
+  `payment-db` volume.
 - `CHEQUE_VERIFICATION_MAX_AGE` (forecast-service, default `0s`): how old a
   stored VERIFIED result may be for a forecast to use it without checking
   again. Forecasts now need `PAYMENT_INTERNAL_API_SECRET` in

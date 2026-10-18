@@ -1,7 +1,6 @@
 package com.flowledger.payment.config;
 
 import com.flowledger.payment.outbox.OutboxProperties;
-import com.flowledger.payment.outbox.OutboxRoutes;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -18,7 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class RabbitConfig {
 
     @Bean
-    public TopicExchange paymentExchange() {
-        return new TopicExchange(OutboxRoutes.EXCHANGE, true, false);
+    public TopicExchange paymentExchange(OutboxProperties properties) {
+        return new TopicExchange(properties.exchange(), true, false);
     }
 }

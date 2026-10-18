@@ -12,6 +12,8 @@ import java.time.Duration;
  * @param lease          how long a claimed event is reserved for one publishing attempt; after it
  *                       expires the event can be claimed again, so a crashed attempt never strands it
  * @param confirmTimeout how long to wait for the broker's publisher confirm
+ * @param exchange       the topic exchange events are published to; tests use their own, so they
+ *                       never reach the queues of the services running locally
  */
 @ConfigurationProperties("flowledger.outbox")
 public record OutboxProperties(
@@ -21,6 +23,7 @@ public record OutboxProperties(
         Duration lease,
         Duration confirmTimeout,
         Duration initialBackoff,
-        Duration maxBackoff
+        Duration maxBackoff,
+        String exchange
 ) {
 }

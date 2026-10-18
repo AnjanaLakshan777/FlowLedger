@@ -437,6 +437,18 @@ FlowLedger testing should cover both business correctness and service boundaries
 Use the actual test commands in each module's `pom.xml` and the frontend's `package.json`. Report
 skipped tests separately from passed tests.
 
+payment-service tests use their own database (`flowledger_payment_test`) and their own RabbitMQ
+exchange (`flowledger.payment.test`). That way they never send events to a locally running
+forecast-service, whose dead-letter queue would otherwise block every forecast. A new `payment-db`
+volume creates the database automatically. For a volume created before this change, create it once:
+
+```powershell
+docker exec flowledger-payment-db psql -U flowledger_app -d flowledger_payment -c "CREATE DATABASE flowledger_payment_test;"
+```
+
+A forecast needs a completed cheque backfill. Keep `CHEQUE_BACKFILL_ON_STARTUP=true` in the local
+`.env`: forecast-service then fills and verifies its cheque projection every time it starts.
+
 <a id="important-business-rules"></a>
 
 ## 📌 Important business rules

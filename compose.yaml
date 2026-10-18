@@ -80,6 +80,8 @@ services:
 
     volumes:
       - payment_db_data:/var/lib/postgresql/data
+      # Creates flowledger_payment_test for the test suite (first start of a new volume only).
+      - ./backend/payment-service/docker-init:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U flowledger_app -d flowledger_payment"]

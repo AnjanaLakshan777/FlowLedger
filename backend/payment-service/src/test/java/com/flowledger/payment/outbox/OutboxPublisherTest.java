@@ -32,7 +32,8 @@ import static org.mockito.Mockito.when;
 class OutboxPublisherTest {
 
     private static final OutboxProperties PROPERTIES = new OutboxProperties(
-            true, 50, Duration.ofSeconds(1), Duration.ofSeconds(60), Duration.ofMillis(200), Duration.ofSeconds(5), Duration.ofMinutes(15));
+            true, 50, Duration.ofSeconds(1), Duration.ofSeconds(60), Duration.ofMillis(200), Duration.ofSeconds(5), Duration.ofMinutes(15),
+            "flowledger.payment");
 
     private final OutboxStore store = mock(OutboxStore.class);
     private final RabbitTemplate rabbit = mock(RabbitTemplate.class);

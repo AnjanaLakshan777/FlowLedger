@@ -138,7 +138,7 @@ class OutboxPublishingIntegrationTest {
         assertThat(message).isNotNull();
         assertThat(message.getMessageProperties().getMessageId()).isEqualTo(eventId.toString());
         assertThat(message.getMessageProperties().getReceivedRoutingKey()).isEqualTo("cheque.issued");
-        assertThat(message.getMessageProperties().getReceivedExchange()).isEqualTo("flowledger.payment");
+        assertThat(message.getMessageProperties().getReceivedExchange()).isEqualTo(properties.exchange());
         assertThat(message.getMessageProperties().getReceivedDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
         assertThat(message.getMessageProperties().<String>getHeader("eventType")).isEqualTo("ChequeIssued");
         assertThat(message.getMessageProperties().<Integer>getHeader("schemaVersion")).isEqualTo(1);
@@ -283,7 +283,7 @@ class OutboxPublishingIntegrationTest {
             ids.add(insertEvent(UUID.randomUUID(), "ChequeIssued", null, "2026-10-15T09:00:%02dZ".formatted(i)));
         }
         OutboxProperties smallBatches = new OutboxProperties(true, 4, properties.pollInterval(), properties.lease(),
-                properties.confirmTimeout(), properties.initialBackoff(), properties.maxBackoff());
+                properties.confirmTimeout(), properties.initialBackoff(), properties.maxBackoff(), properties.exchange());
         Callable<Integer> drain = () -> {
             OutboxPublisher worker = new OutboxPublisher(store, rabbitTemplate, smallBatches);
             int published = 0;
