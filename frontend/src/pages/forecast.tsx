@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useAppState } from "@/components/app/app-state"
+import { useAppState, useAutoForecast } from "@/components/app/app-state"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { CashFlowCalendar } from "@/components/app/cash-flow-calendar"
 import { DataState, useNotReady } from "@/components/app/data-state"
@@ -31,7 +31,8 @@ const shortageRow = "[&>td:first-child]:shadow-[inset_3px_0_0_var(--destructive)
 const range = (r: { low: number; high: number }) => <span className="text-muted-foreground">{fmt.compact(r.low)} – {fmt.compact(r.high)}</span>
 
 export default function ForecastPage() {
-  const { forecast, kpis, mode, forecastInfo, actions } = useAppState()
+  const { forecast, kpis, mode, forecastInfo, forecastAutoUpdate: auto, actions } = useAppState()
+  useAutoForecast()
   const live = mode === "live"
   const notReady = useNotReady(["forecast", "cheques"])
   const [updating, setUpdating] = useState(false)
@@ -58,9 +59,9 @@ export default function ForecastPage() {
         <PageHeader title="Cash-Flow Forecast" description="Expected cash position for the next 84 days, from the Actual Bank Balance the bank confirmed." />
         {notReady ? <DataState resources={["forecast", "cheques"]} what="The forecast" /> : (
           <Card className="items-center gap-3 px-4 py-12 text-center text-sm">
-            No forecast has been made yet.
-            <span className="text-muted-foreground max-w-[60ch]">A forecast starts from the confirmed bank balance, so the company current account needs at least one imported bank statement.</span>
-            {updateButton}
+            {auto.updating ? "Making today's forecast…" : "No forecast has been made yet."}
+            <span className="text-muted-foreground max-w-[60ch]">{auto.error ?? "A forecast starts from the confirmed bank balance, so the company current account needs at least one imported bank statement."}</span>
+            {!auto.updating && updateButton}
           </Card>
         )}
       </>
@@ -82,7 +83,7 @@ export default function ForecastPage() {
           : `Expected cash position for the next ${FORECAST_WEEKS} weeks, Monday to Sunday. Select a date to see what moves the balance, or add a cheque payment.`}
         actions={<>{updateButton}<Segmented value={view} onChange={setView} options={[{ value: "calendar", label: "Calendar" }, { value: "weekly", label: "Weekly summary" }, { value: "daily", label: "Daily view" }]} /></>}
       />
-      {run && <ForecastNotices warnings={run.warnings} outdated={!!forecastInfo?.outdated} madeAt={run.createdAt} onUpdate={() => void update()} updating={updating} />}
+      {run && <ForecastNotices warnings={run.warnings} outdated={!!forecastInfo?.outdated} autoError={auto.error} madeAt={run.createdAt} onUpdate={() => void update()} updating={updating} />}
       <StatRow items={[
         { label: "Actual Bank Balance (opening)", value: fmt.lkr0(run ? run.openingBalance : kpis.actualBalance), sub: <span className="inline-flex items-center gap-1"><Check className="size-3" />Bank data · {run ? fmt.dateTime(colomboLocal(run.openingBalanceAsOf)) : fmt.dateTime(kpis.lastSync)}</span> },
         { label: `Expected receipts · ${horizon}`, value: estimated ? fmt.lkr0(kpis.forecastReceipts) : "Not estimated", sub: "Forecast" },
@@ -187,10 +188,12 @@ export default function ForecastPage() {
         <AlertTitle>How receipts are timed</AlertTitle>
         {live ? (
           <AlertDescription>
-            Expected receipts are cash sales deposits and card sales settlements only: for each weekday, the average the bank confirmed on that
-            weekday over the 8 weeks before the balance date, from classified bank transactions by their actual transaction date. Days without an
-            imported bank statement are left out, not counted as zero; unclassified and other transactions never count as sales. Daily sales
-            entries are not added, so the same money is never counted twice. Cheques are deducted on their expected clearing date.
+            Expected receipts are cash sales deposits and card sales settlements only, each forecast separately. Each day receives what the same
+            weekday 52 weeks earlier received, scaled by the growth rate: this year's collections over the same weekdays a year earlier, across
+            the 8 weeks before the balance date. A day's collections come from the bank statement when one covers it, otherwise from recorded
+            sales (historical imports and Daily Sales entries) received one day after the sale date — never both, so the same money is never
+            counted twice. Days with neither are left out, not counted as zero. The forecast is made again automatically each day and whenever
+            the data changes. Cheques are deducted on their expected clearing date.
           </AlertDescription>
         ) : (
         <AlertDescription>
@@ -204,19 +207,33 @@ export default function ForecastPage() {
   )
 }
 
-/** The forecast service's own data-quality labels, plus a note when cheques changed after the forecast was made. */
-function ForecastNotices({ warnings, outdated, madeAt, onUpdate, updating }: {
-  warnings: ForecastWarning[]; outdated: boolean; madeAt: string; onUpdate: () => void; updating: boolean
+/**
+ * The forecast service's own data-quality labels, plus a note when cheques changed after the forecast
+ * was made or when today's automatic update failed.
+ */
+function ForecastNotices({ warnings, outdated, autoError, madeAt, onUpdate, updating }: {
+  warnings: ForecastWarning[]; outdated: boolean; autoError: string | null; madeAt: string; onUpdate: () => void; updating: boolean
 }) {
   const TITLE: Record<string, string> = {
     BALANCE_STALE: "The opening balance is out of date",
     INSUFFICIENT_HISTORY: "Receipts could not be estimated",
     INCOMPLETE_CLASSIFICATION: "Some bank transactions are not classified",
-    PATTERN_FROM_SALES_HISTORY: "Last year's pattern partly comes from imported sales",
+    PATTERN_FROM_SALES_HISTORY: "Last year's pattern partly comes from recorded sales",
     GROWTH_RATIO_OUT_OF_RANGE: "This year's collections differ strongly from last year",
+    GROWTH_FROM_SALES_RECORDS: "This year's growth partly comes from daily sales",
   }
   return (
     <>
+      {autoError && (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>The forecast could not be updated automatically</AlertTitle>
+          <AlertDescription>
+            <p>{autoError} Showing the forecast made {fmt.dateTimeFull(colomboLocal(madeAt))}.</p>
+            <Button variant="outline" size="sm" className="mt-1" onClick={onUpdate} disabled={updating}><RefreshCw />Try again</Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {warnings.map((w) => (
         <Alert key={w.code} variant={w.code === "BALANCE_STALE" ? "destructive" : "info"}>
           {w.code === "BALANCE_STALE" ? <AlertTriangle /> : <Info />}

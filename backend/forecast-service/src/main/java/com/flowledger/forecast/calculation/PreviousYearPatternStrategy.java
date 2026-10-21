@@ -20,13 +20,14 @@ import java.util.UUID;
  * are calculated separately.
  * <ul>
  *     <li>Reference day: {@code d - 364} days, exactly 52 weeks, so the weekday is the same.</li>
- *     <li>A previous-year value is bank-confirmed (CASH_SALES_DEPOSIT / CARD_SALES_SETTLEMENT by
- *     transaction date) when that day is covered by an imported statement; otherwise an approved
- *     historical sale whose sale date plus the channel's receipt lag is that day; otherwise
- *     unknown. Bank and import values are never added together.</li>
- *     <li>Growth ratio per channel: the sum of current-year bank-confirmed collections over the sum
- *     of previous-year values, over the growth-window days (lookbackWeeks before the balance date)
- *     where both values are known. Unknown days are left out, never read as zero.</li>
+ *     <li>A day's value, in either year, is bank-confirmed (CASH_SALES_DEPOSIT /
+ *     CARD_SALES_SETTLEMENT by transaction date) when that day is covered by an imported
+ *     statement; otherwise a recorded sale (an approved import row or a daily sale entered by hand)
+ *     whose sale date plus the channel's receipt lag is that day; otherwise unknown. Bank and sales
+ *     values are never added together.</li>
+ *     <li>Growth ratio per channel: the sum of current-year values over the sum of previous-year
+ *     values, over the growth-window days (lookbackWeeks before the balance date) where both values
+ *     are known. Unknown days are left out, never read as zero.</li>
  *     <li>Expected(d) = reference(d - 364) x current sum / previous sum, rounded half-up to cents
  *     once. The ratio is not capped; a ratio outside the warning range is reported.</li>
  * </ul>
@@ -41,24 +42,27 @@ public final class PreviousYearPatternStrategy {
 
     private enum Channel { CASH, CARD }
 
-    private enum Source { BANK, IMPORT }
+    private enum Source { BANK, SALES }
 
     private record Observation(BigDecimal amount, Source source) {
     }
 
-    /** An approved historical sale (sale date, not a bank date) from cash-management-service. */
-    public record ApprovedSale(LocalDate saleDate, BigDecimal cashSales, BigDecimal cardSales, UUID importBatchId) {
+    /**
+     * A recorded sale (sale date, not a bank date) from cash-management-service: an approved import
+     * row, or a daily sale entered by hand ({@code importBatchId} null).
+     */
+    public record RecordedSale(LocalDate saleDate, BigDecimal cashSales, BigDecimal cardSales, UUID importBatchId) {
     }
 
     /**
      * @param coveredDates     days covered by an imported statement (current and previous year)
      * @param bankCash         CASH_SALES_DEPOSIT credits per covered date
      * @param bankCard         CARD_SALES_SETTLEMENT credits per covered date
-     * @param salesBySaleDate  approved historical sales, one per sale date
+     * @param salesBySaleDate  recorded sales, one per sale date
      */
     public record Inputs(LocalDate balanceDate, List<LocalDate> forecastDates, Set<LocalDate> coveredDates,
                          Map<LocalDate, BigDecimal> bankCash, Map<LocalDate, BigDecimal> bankCard,
-                         Map<LocalDate, ApprovedSale> salesBySaleDate) {
+                         Map<LocalDate, RecordedSale> salesBySaleDate) {
     }
 
     public record Result(InflowEstimate estimate, PatternQuality quality) {
@@ -85,6 +89,8 @@ public final class PreviousYearPatternStrategy {
         Map<Channel, Map<DayOfWeek, Integer>> comparable = new EnumMap<>(Channel.class);
         int fromBank = 0;
         int fromImports = 0;
+        int currentFromBank = 0;
+        int currentFromSales = 0;
         for (Channel channel : Channel.values()) {
             currentSums.put(channel, BigDecimal.ZERO);
             previousSums.put(channel, BigDecimal.ZERO);
@@ -97,14 +103,19 @@ public final class PreviousYearPatternStrategy {
 
         for (LocalDate day = windowFrom; !day.isAfter(inputs.balanceDate()); day = day.plusDays(1)) {
             for (Channel channel : Channel.values()) {
-                Optional<BigDecimal> current = currentYear(inputs, channel, day);
-                Optional<Observation> previous = previousYear(inputs, channel, referenceDate(day), cashLag, cardLag);
+                Optional<Observation> current = observed(inputs, channel, day, cashLag, cardLag);
+                Optional<Observation> previous = observed(inputs, channel, referenceDate(day), cashLag, cardLag);
                 if (current.isEmpty() || previous.isEmpty()) {
                     continue;
                 }
-                currentSums.merge(channel, current.get(), BigDecimal::add);
+                currentSums.merge(channel, current.get().amount(), BigDecimal::add);
                 previousSums.merge(channel, previous.get().amount(), BigDecimal::add);
                 comparable.get(channel).merge(day.getDayOfWeek(), 1, Integer::sum);
+                if (current.get().source() == Source.BANK) {
+                    currentFromBank++;
+                } else {
+                    currentFromSales++;
+                }
                 if (previous.get().source() == Source.BANK) {
                     fromBank++;
                 } else {
@@ -119,7 +130,7 @@ public final class PreviousYearPatternStrategy {
             Map<Channel, BigDecimal> values = new EnumMap<>(Channel.class);
             boolean dayMissing = false;
             for (Channel channel : Channel.values()) {
-                Optional<Observation> reference = previousYear(inputs, channel, referenceDate(date), cashLag, cardLag);
+                Optional<Observation> reference = observed(inputs, channel, referenceDate(date), cashLag, cardLag);
                 if (reference.isEmpty()) {
                     dayMissing = true;
                     continue;
@@ -142,7 +153,7 @@ public final class PreviousYearPatternStrategy {
             samples.put(day, Math.min(comparable.get(Channel.CASH).get(day), comparable.get(Channel.CARD).get(day)));
         }
         Quality quality = new Quality(parameters, windowFrom, inputs.balanceDate(), comparable, fromBank, fromImports,
-                missing, currentSums, previousSums);
+                currentFromBank, currentFromSales, missing, currentSums, previousSums);
 
         if (samples.values().stream().anyMatch(count -> count < parameters.minimumSamplesPerWeekday())) {
             return new Result(InflowEstimate.insufficient(samples), quality.build(PatternQuality.NOT_ENOUGH_COMPARABLE_DAYS));
@@ -176,25 +187,18 @@ public final class PreviousYearPatternStrategy {
         return reference.multiply(currentSum).divide(previousSum, 2, RoundingMode.HALF_UP);
     }
 
-    private static Optional<BigDecimal> currentYear(Inputs inputs, Channel channel, LocalDate day) {
-        if (!inputs.coveredDates().contains(day)) {
-            return Optional.empty();
-        }
-        return Optional.of(bank(inputs, channel, day));
-    }
-
-    // Bank-confirmed when the day has statement coverage; otherwise an approved sale received that
-    // day after the channel's lag; otherwise unknown.
-    private static Optional<Observation> previousYear(Inputs inputs, Channel channel, LocalDate day, int cashLag,
-                                                      int cardLag) {
+    // Bank-confirmed when the day has statement coverage; otherwise a recorded sale received that
+    // day after the channel's lag; otherwise unknown. The same for both years.
+    private static Optional<Observation> observed(Inputs inputs, Channel channel, LocalDate day, int cashLag,
+                                                  int cardLag) {
         if (inputs.coveredDates().contains(day)) {
             return Optional.of(new Observation(bank(inputs, channel, day), Source.BANK));
         }
-        ApprovedSale sale = inputs.salesBySaleDate().get(day.minusDays(channel == Channel.CASH ? cashLag : cardLag));
+        RecordedSale sale = inputs.salesBySaleDate().get(day.minusDays(channel == Channel.CASH ? cashLag : cardLag));
         if (sale == null) {
             return Optional.empty();
         }
-        return Optional.of(new Observation(channel == Channel.CASH ? sale.cashSales() : sale.cardSales(), Source.IMPORT));
+        return Optional.of(new Observation(channel == Channel.CASH ? sale.cashSales() : sale.cardSales(), Source.SALES));
     }
 
     private static BigDecimal bank(Inputs inputs, Channel channel, LocalDate day) {
@@ -204,7 +208,8 @@ public final class PreviousYearPatternStrategy {
 
     private record Quality(ForecastParameters parameters, LocalDate windowFrom, LocalDate windowTo,
                            Map<Channel, Map<DayOfWeek, Integer>> comparable, int fromBank, int fromImports,
-                           int missing, Map<Channel, BigDecimal> currentSums, Map<Channel, BigDecimal> previousSums) {
+                           int currentFromBank, int currentFromSales, int missing,
+                           Map<Channel, BigDecimal> currentSums, Map<Channel, BigDecimal> previousSums) {
 
         PatternQuality build(String insufficientReason) {
             return new PatternQuality(CODE, REFERENCE_OFFSET_DAYS, windowFrom, windowTo,
@@ -213,7 +218,7 @@ public final class PreviousYearPatternStrategy {
                     parameters.growthRatioWarningLow(), parameters.growthRatioWarningHigh(),
                     outOfRange(Channel.CASH), outOfRange(Channel.CARD),
                     fromBank, fromImports, missing, parameters.cashReceiptLagDays(), parameters.cardReceiptLagDays(),
-                    insufficientReason);
+                    insufficientReason, currentFromBank, currentFromSales);
         }
 
         private BigDecimal ratio(Channel channel) {

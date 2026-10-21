@@ -1,7 +1,7 @@
 package com.flowledger.forecast.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.ApprovedSale;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.RecordedSale;
 import com.flowledger.forecast.exception.SalesHistoryUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -19,10 +19,10 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Reads approved historical sales from cash-management-service, which owns sales and their
- * imports, with the user's own token. Only approved import rows are returned there, including days
- * approved with zero sales. Any failure or answer that breaks the contract is refused (503), never
- * replaced by an empty history.
+ * Reads recorded sales from cash-management-service, which owns sales and their imports, with the
+ * user's own token: approved import rows (including days approved with zero sales) and daily sales
+ * entered by hand. Any failure or answer that breaks the contract is refused (503), never replaced
+ * by an empty history.
  */
 @Slf4j
 @Component
@@ -36,8 +36,8 @@ public class CashManagementClient {
         this.restClient = restClient;
     }
 
-    /** Approved sales with a sale date between from and to, inclusive, one per date. */
-    public List<ApprovedSale> approvedSales(Jwt user, UUID companyId, LocalDate from, LocalDate to) {
+    /** Recorded sales with a sale date between from and to, inclusive, one per date. */
+    public List<RecordedSale> recordedSales(Jwt user, UUID companyId, LocalDate from, LocalDate to) {
         History history;
         try {
             history = restClient.get()
@@ -62,7 +62,7 @@ public class CashManagementClient {
             }
         }
         return history.days().stream()
-                .map(day -> new ApprovedSale(day.saleDate(), day.cashSalesAmount(), day.cardSalesAmount(),
+                .map(day -> new RecordedSale(day.saleDate(), day.cashSalesAmount(), day.cardSalesAmount(),
                         day.importBatchId()))
                 .toList();
     }
@@ -72,10 +72,14 @@ public class CashManagementClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Day(LocalDate saleDate, BigDecimal cashSalesAmount, BigDecimal cardSalesAmount, UUID importBatchId) {
+    record Day(LocalDate saleDate, BigDecimal cashSalesAmount, BigDecimal cardSalesAmount, UUID importBatchId,
+               String entrySource) {
 
+        // An import row names its batch; a manual entry has none.
         boolean invalid() {
-            return saleDate == null || importBatchId == null || !money(cashSalesAmount) || !money(cardSalesAmount);
+            boolean sourceMatches = "HISTORICAL_IMPORT".equals(entrySource) ? importBatchId != null
+                    : "UI".equals(entrySource) && importBatchId == null;
+            return saleDate == null || !sourceMatches || !money(cashSalesAmount) || !money(cardSalesAmount);
         }
 
         private static boolean money(BigDecimal amount) {

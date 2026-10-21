@@ -97,8 +97,10 @@ payroll system, or payment-execution platform.
 - Forecast an 84-day horizon.
 - Estimate future cash and card inflows separately.
 - Use the `PREVIOUS_YEAR_PATTERN` approach: align historical reference dates by 364 days (52 weeks)
-  and adjust the pattern using comparable current-year, bank-confirmed inflows.
-- Recalculate forecasts when new eligible inputs are included in a subsequent forecast calculation.
+  and adjust the pattern using comparable current-year inflows (bank-confirmed, or recorded daily sales
+  where no bank statement covers the day).
+- Recalculate the forecast automatically each day and whenever its inputs change, when the Dashboard or
+  Cash-Flow Forecast screen opens.
 - Show data-quality warnings when the available history is insufficient or the growth ratio is
   outside the configured warning range.
 - Project daily closing balances and identify potential cash-shortage dates.
@@ -130,7 +132,8 @@ reflect newer information without rewriting the historical snapshot.
 ```mermaid
 flowchart TD
     A["Historical bank transactions"] --> D["Build comparable historical pattern"]
-    B["Approved historical sales imports"] --> D
+    B["Recorded sales (approved imports and daily sales)"] --> D
+    B --> E
     C["Current-year bank-confirmed inflows"] --> E["Calculate growth adjustment"]
     D --> F["Previous-year pattern × growth adjustment"]
     E --> F
@@ -150,7 +153,7 @@ Conceptually, for each eligible channel (cash or card):
 
 ```text
 reference_date  = forecast_date - 364 days
-growth_ratio    = comparable current-year bank inflows
+growth_ratio    = comparable current-year inflows (bank, else recorded sales)
                   / comparable previous-year inflows
 
 expected_inflow = previous-year reference value × growth_ratio
@@ -203,7 +206,7 @@ flowchart TB
     PM -- "Cheque events (outbox)" --> MQ["RabbitMQ"]
     MQ -- "Cheque events" --> FS
 
-    FS -. "Approved sales history API" .-> CM
+    FS -. "Sales history API" .-> CM
     FS -. "Bank data API" .-> BI
     FS -. "Internal cheque scan and summary API" .-> PM
 ```

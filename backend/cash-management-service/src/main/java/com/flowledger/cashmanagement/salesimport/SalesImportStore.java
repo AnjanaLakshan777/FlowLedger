@@ -194,22 +194,34 @@ public class SalesImportStore {
     }
 
     /**
-     * Valid rows of approved imports with a sale date between from and to, oldest first. Approval
-     * guarantees one such row per company and date.
+     * Recorded sales with a sale date between from and to, oldest first: valid rows of approved
+     * imports (approval guarantees one such row per company and date) and daily sales entered by
+     * hand. A manual entry on a date an approved import already holds (an approved zero-sales day)
+     * is left out, so each date is listed once.
      */
-    public List<SalesHistoryResponse.Day> approvedSales(UUID companyId, LocalDate from, LocalDate to) {
+    public List<SalesHistoryResponse.Day> salesHistory(UUID companyId, LocalDate from, LocalDate to) {
         return jdbcTemplate.query("""
-                        SELECT r.sale_date, r.cash_sales_amount, r.card_sales_amount, b.id AS batch_id
+                        SELECT r.sale_date, r.cash_sales_amount, r.card_sales_amount, b.id AS batch_id,
+                               'HISTORICAL_IMPORT' AS entry_source
                         FROM sales_import_rows r
                         JOIN sales_import_batches b ON b.id = r.batch_id
                         WHERE b.company_id = ? AND b.status = 'APPROVED' AND r.validation_status = 'VALID'
                           AND r.sale_date BETWEEN ? AND ?
-                        ORDER BY r.sale_date
+                        UNION ALL
+                        SELECT d.sale_date, d.cash_sales_amount, d.card_sales_amount, NULL, 'UI'
+                        FROM daily_sales d
+                        WHERE d.company_id = ? AND d.entry_source = 'UI' AND d.sale_date BETWEEN ? AND ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM sales_import_rows r
+                              JOIN sales_import_batches b ON b.id = r.batch_id
+                              WHERE b.company_id = d.company_id AND b.status = 'APPROVED'
+                                AND r.validation_status = 'VALID' AND r.sale_date = d.sale_date)
+                        ORDER BY 1
                         """,
                 (rs, rowNum) -> new SalesHistoryResponse.Day(rs.getObject("sale_date", LocalDate.class),
                         rs.getBigDecimal("cash_sales_amount"), rs.getBigDecimal("card_sales_amount"),
-                        rs.getObject("batch_id", UUID.class)),
-                companyId, from, to);
+                        rs.getObject("batch_id", UUID.class), rs.getString("entry_source")),
+                companyId, from, to, companyId, from, to);
     }
 
     public List<LocalDate> validDates(UUID batchId) {

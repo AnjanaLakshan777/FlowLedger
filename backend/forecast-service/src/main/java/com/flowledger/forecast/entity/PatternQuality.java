@@ -19,9 +19,12 @@ import java.time.LocalDate;
  * @param cardRatioOutOfRange         the same for card settlements
  * @param referenceFromBank           previous-year reference observations (growth window and horizon) taken
  *                                    from bank-confirmed transactions
- * @param referenceFromImports        those taken from approved historical sales imports
+ * @param referenceFromImports        those taken from recorded sales (approved imports and manual daily sales)
  * @param missingReferenceDays        horizon days whose previous-year reference is unknown in either channel
  * @param insufficientReason          why no inflows were estimated, or null
+ * @param currentFromBank             comparable current-year growth-window observations taken from
+ *                                    bank-confirmed transactions (0 in runs saved before this field existed)
+ * @param currentFromSales            those taken from recorded sales where no statement covers the day
  */
 public record PatternQuality(
         String method,
@@ -41,7 +44,9 @@ public record PatternQuality(
         int missingReferenceDays,
         int cashReceiptLagDays,
         int cardReceiptLagDays,
-        String insufficientReason
+        String insufficientReason,
+        int currentFromBank,
+        int currentFromSales
 ) {
 
     public static final String NOT_ENOUGH_COMPARABLE_DAYS = "NOT_ENOUGH_COMPARABLE_DAYS";

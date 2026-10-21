@@ -8,7 +8,7 @@ import com.flowledger.forecast.calculation.InflowEstimate;
 import com.flowledger.forecast.calculation.InflowForecastStrategy;
 import com.flowledger.forecast.calculation.InflowHistory;
 import com.flowledger.forecast.calculation.PreviousYearPatternStrategy;
-import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.ApprovedSale;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.RecordedSale;
 import com.flowledger.forecast.calculation.StatementCoverage;
 import com.flowledger.forecast.client.BankIntegrationClient;
 import com.flowledger.forecast.client.BankIntegrationClient.Balance;
@@ -282,8 +282,9 @@ public class ForecastService {
     /**
      * PREVIOUS_YEAR_PATTERN: the growth window of bank history before the balance date, the
      * previous-year bank history from 364 days before the growth window to 364 days before the
-     * horizon end, and approved historical sales whose receipt (sale date plus lag) falls in that
-     * previous-year range. Daily sales entered by hand are not read.
+     * horizon end, and recorded sales (approved imports and daily sales entered by hand) whose
+     * receipt (sale date plus lag) falls between the start of that previous-year range and the
+     * balance date, so they serve days without statement coverage in both years.
      */
     private Inflows previousYearInflows(Jwt user, UUID companyId, UUID accountId, LocalDate balanceDate,
                                         List<LocalDate> horizon, List<StatementCoverage.Period> periods,
@@ -298,12 +299,12 @@ public class ForecastService {
                 user, companyId, accountId, windowFrom, balanceDate));
         transactions.addAll(bankIntegrationClient.listTransactions(
                 user, companyId, accountId, referenceFrom, referenceTo));
-        List<ApprovedSale> sales = cashManagementClient.approvedSales(user, companyId,
-                referenceFrom.minusDays(Math.max(cashLag, cardLag)), referenceTo.minusDays(Math.min(cashLag, cardLag)));
+        List<RecordedSale> sales = cashManagementClient.recordedSales(user, companyId,
+                referenceFrom.minusDays(Math.max(cashLag, cardLag)), balanceDate.minusDays(Math.min(cashLag, cardLag)));
 
         Set<LocalDate> covered = StatementCoverage.coveredDates(periods, referenceFrom, balanceDate);
         InflowHistory bank = inflowHistory(referenceFrom, balanceDate, covered, transactions);
-        Map<LocalDate, ApprovedSale> salesByDate = new HashMap<>();
+        Map<LocalDate, RecordedSale> salesByDate = new HashMap<>();
         sales.forEach(sale -> salesByDate.put(sale.saleDate(), sale));
         PreviousYearPatternStrategy.Result result = PreviousYearPatternStrategy.estimate(
                 new PreviousYearPatternStrategy.Inputs(balanceDate, horizon, covered, bank.cashSalesDeposits(),
@@ -316,7 +317,7 @@ public class ForecastService {
                 .append(parameters.growthRatioWarningLow().toPlainString()).append('|')
                 .append(parameters.growthRatioWarningHigh().toPlainString()).append('\n');
         sales.stream()
-                .sorted(Comparator.comparing(ApprovedSale::saleDate))
+                .sorted(Comparator.comparing(RecordedSale::saleDate))
                 .forEach(sale -> extra.append("sale=").append(sale.saleDate()).append('|')
                         .append(sale.cashSales().toPlainString()).append('|').append(sale.cardSales().toPlainString())
                         .append('|').append(sale.importBatchId()).append('\n'));

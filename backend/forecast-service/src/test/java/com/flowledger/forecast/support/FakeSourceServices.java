@@ -135,7 +135,7 @@ public final class FakeSourceServices {
         reply(importsPath(companyId), 200, "[" + batches + "]");
     }
 
-    // cash-management-service's approved sales history, served by the same fake.
+    // cash-management-service's recorded sales history, served by the same fake.
     public static String salesHistoryPath(UUID companyId) {
         return "/api/v1/cash-management/companies/" + companyId + "/sales-history";
     }
@@ -146,8 +146,17 @@ public final class FakeSourceServices {
 
     public static String approvedSale(LocalDate saleDate, String cash, String card, UUID batchId) {
         return """
-                {"saleDate": "%s", "cashSalesAmount": %s, "cardSalesAmount": %s, "importBatchId": "%s"}
+                {"saleDate": "%s", "cashSalesAmount": %s, "cardSalesAmount": %s, "importBatchId": "%s",
+                 "entrySource": "HISTORICAL_IMPORT"}
                 """.formatted(saleDate, cash, card, batchId);
+    }
+
+    // A daily sale entered on the Daily Sales screen: no import batch.
+    public static String manualSale(LocalDate saleDate, String cash, String card) {
+        return """
+                {"saleDate": "%s", "cashSalesAmount": %s, "cardSalesAmount": %s, "importBatchId": null,
+                 "entrySource": "UI"}
+                """.formatted(saleDate, cash, card);
     }
 
     public void transactions(UUID companyId, List<String> transactions) {

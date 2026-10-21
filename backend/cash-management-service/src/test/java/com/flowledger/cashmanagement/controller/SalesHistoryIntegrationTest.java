@@ -32,7 +32,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The approved sales history that forecast-service reads for its previous-year pattern. Membership
+ * The recorded sales history (approved imports and manual entries) that forecast-service reads for
+ * its previous-year pattern and growth ratio. Membership
  * answers come from FakeIdentityServer. Needs the local cash-management database; each test is
  * rolled back.
  */
@@ -66,28 +67,50 @@ class SalesHistoryIntegrationTest {
     }
 
     @Test
-    void shouldListOnlyApprovedRowsIncludingZeroDays() throws Exception {
+    void shouldListApprovedRowsIncludingZeroDaysAndManualEntries() throws Exception {
         approved("a.csv", "2025-01-01,100.00,50.50", "2025-01-02,0,0", "2025-01-03,,1");
         pending("b.csv", "2025-02-01,7,7");
         rejected("c.csv", "2025-03-01,8,8");
         upload("d.csv", "2025-04-01,9,9", "2025-04-01,9,9");   // invalid: duplicate dates
-        // A manual entry is a daily sale, not imported history.
-        jdbcTemplate.update("""
-                INSERT INTO daily_sales (company_id, sale_date, cash_sales_amount, card_sales_amount, entry_source, recorded_by)
-                VALUES (?, DATE '2025-05-01', 5.00, 0.00, 'UI', ?)
-                """, companyId, UUID.randomUUID());
+        manual("2025-05-01", "5.00", "0.00");
 
         history("2024-12-01", "2025-12-31")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.from").value("2024-12-01"))
-                .andExpect(jsonPath("$.days", hasSize(2)))
-                .andExpect(jsonPath("$.days[*].saleDate", contains("2025-01-01", "2025-01-02")))
+                .andExpect(jsonPath("$.days", hasSize(3)))
+                .andExpect(jsonPath("$.days[*].saleDate", contains("2025-01-01", "2025-01-02", "2025-05-01")))
                 .andExpect(jsonPath("$.days[0].cashSalesAmount").value(100.00))
                 .andExpect(jsonPath("$.days[0].cardSalesAmount").value(50.50))
                 .andExpect(jsonPath("$.days[0].importBatchId").exists())
+                .andExpect(jsonPath("$.days[0].entrySource").value("HISTORICAL_IMPORT"))
                 // Approved with zero sales: present as a known zero, although it has no daily_sales record.
                 .andExpect(jsonPath("$.days[1].cashSalesAmount").value(0.0))
-                .andExpect(jsonPath("$.days[1].cardSalesAmount").value(0.0));
+                .andExpect(jsonPath("$.days[1].cardSalesAmount").value(0.0))
+                // Entered on the Daily Sales screen: no import batch.
+                .andExpect(jsonPath("$.days[2].cashSalesAmount").value(5.00))
+                .andExpect(jsonPath("$.days[2].importBatchId").doesNotExist())
+                .andExpect(jsonPath("$.days[2].entrySource").value("UI"));
+    }
+
+    @Test
+    void shouldListAnApprovedZeroDayOnceWhenAManualEntryHasTheSameDate() throws Exception {
+        approved("a.csv", "2025-01-02,0,0");
+        manual("2025-01-02", "5.00", "0.00");
+
+        history("2025-01-01", "2025-01-31")
+                .andExpect(jsonPath("$.days", hasSize(1)))
+                .andExpect(jsonPath("$.days[0].entrySource").value("HISTORICAL_IMPORT"))
+                .andExpect(jsonPath("$.days[0].cashSalesAmount").value(0.0));
+    }
+
+    @Test
+    void shouldNotListAnotherCompanysManualEntries() throws Exception {
+        jdbcTemplate.update("""
+                INSERT INTO daily_sales (company_id, sale_date, cash_sales_amount, card_sales_amount, entry_source, recorded_by)
+                VALUES (?, DATE '2025-05-01', 5.00, 0.00, 'UI', ?)
+                """, UUID.randomUUID(), UUID.randomUUID());
+
+        history("2025-05-01", "2025-05-31").andExpect(jsonPath("$.days", hasSize(0)));
     }
 
     @Test
@@ -138,6 +161,13 @@ class SalesHistoryIntegrationTest {
         mockMvc.perform(post(importsUrl() + "/" + id + "/approve").with(user(controller))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"version\": 1, \"excludeInvalidRows\": true}"))
                 .andExpect(status().isOk());
+    }
+
+    private void manual(String saleDate, String cash, String card) {
+        jdbcTemplate.update("""
+                INSERT INTO daily_sales (company_id, sale_date, cash_sales_amount, card_sales_amount, entry_source, recorded_by)
+                VALUES (?, ?::date, ?::numeric, ?::numeric, 'UI', ?)
+                """, companyId, saleDate, cash, card, UUID.randomUUID());
     }
 
     private void pending(String filename, String... rows) throws Exception {

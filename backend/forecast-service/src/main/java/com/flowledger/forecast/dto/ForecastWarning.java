@@ -21,6 +21,7 @@ public record ForecastWarning(String code, String message) {
     public static final String ACTUALS_INCOMPLETE = "ACTUALS_INCOMPLETE";
     public static final String PATTERN_FROM_SALES_HISTORY = "PATTERN_FROM_SALES_HISTORY";
     public static final String GROWTH_RATIO_OUT_OF_RANGE = "GROWTH_RATIO_OUT_OF_RANGE";
+    public static final String GROWTH_FROM_SALES_RECORDS = "GROWTH_FROM_SALES_RECORDS";
 
     public static List<ForecastWarning> forRun(ForecastRun run) {
         DataQuality quality = run.getDataQuality();
@@ -39,8 +40,14 @@ public record ForecastWarning(String code, String message) {
         }
         if (pattern != null && pattern.referenceFromImports() > 0) {
             warnings.add(new ForecastWarning(PATTERN_FROM_SALES_HISTORY, "Part of last year's pattern comes from "
-                    + "approved historical sales (sale date plus " + pattern.cashReceiptLagDays() + " day(s) for cash, "
+                    + "recorded sales (sale date plus " + pattern.cashReceiptLagDays() + " day(s) for cash, "
                     + pattern.cardReceiptLagDays() + " for card) where no bank statement covers the day."));
+        }
+        if (pattern != null && pattern.currentFromSales() > 0) {
+            warnings.add(new ForecastWarning(GROWTH_FROM_SALES_RECORDS, "This year's growth is partly measured from "
+                    + "recorded daily sales (sale date plus " + pattern.cashReceiptLagDays() + " day(s) for cash, "
+                    + pattern.cardReceiptLagDays() + " for card) where no bank statement covers the day. Import bank "
+                    + "statements to measure it from bank-confirmed deposits."));
         }
         if (pattern != null && (pattern.cashRatioOutOfRange() || pattern.cardRatioOutOfRange())) {
             warnings.add(new ForecastWarning(GROWTH_RATIO_OUT_OF_RANGE, "This year's collections compared with last "
@@ -59,12 +66,12 @@ public record ForecastWarning(String code, String message) {
     private static String insufficientPattern(PatternQuality pattern, int minimumDays) {
         String reason = switch (String.valueOf(pattern.insufficientReason())) {
             case PatternQuality.MISSING_REFERENCE_DAYS -> pattern.missingReferenceDays()
-                    + " day(s) of last year's corresponding weeks have no bank statement and no approved "
-                    + "historical sales";
+                    + " day(s) of last year's corresponding weeks have no bank statement and no recorded sales";
             case PatternQuality.ZERO_REFERENCE_COLLECTIONS -> "last year's collections in the comparison weeks were zero, "
                     + "so this year's growth cannot be measured";
             default -> "fewer than " + minimumDays + " days of every weekday in the last "
-                    + "weeks can be compared with the same weekday a year earlier";
+                    + "weeks (bank statements or recorded daily sales) can be compared with the same weekday a year "
+                    + "earlier";
         };
         return "Sales inflows were not estimated: " + reason + ". Balances include cheque payments only.";
     }

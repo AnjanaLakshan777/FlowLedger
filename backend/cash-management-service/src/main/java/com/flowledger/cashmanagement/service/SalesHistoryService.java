@@ -17,7 +17,8 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Approved historical sales for the forecast's previous-year pattern. Read with the user's own
+ * Recorded sales (approved imports and manual daily sales) for the forecast's previous-year pattern
+ * and growth ratio. Read with the user's own
  * token by forecast-service, so the roles are those that may create forecasts (the Cashier has
  * neither). Company access is checked before any database work.
  */
@@ -53,6 +54,6 @@ public class SalesHistoryService {
             throw new InvalidDailySaleException("to", "at most " + MAX_DAYS + " days can be requested at once");
         }
         return new SalesHistoryResponse(from, to,
-                readTransaction.execute(status -> store.approvedSales(companyId, from, to)));
+                readTransaction.execute(status -> store.salesHistory(companyId, from, to)));
     }
 }

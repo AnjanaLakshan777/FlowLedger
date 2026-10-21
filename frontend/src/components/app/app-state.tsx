@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import * as seed from "@/data"
 import type { AccessChange, BankAccount, BankTransaction, Cheque, DailySale, ImportRecord, Role, User } from "@/data/types"
 import type { ForecastRunSummary } from "@/lib/api/flowledger"
@@ -43,6 +43,11 @@ export interface AppActions {
   cancelCheque: (c: Cheque, reason: string) => Promise<string | null>
   /** Asks the forecast service for a forecast from the current data. */
   refreshForecast: () => Promise<string | null>
+  /**
+   * Brings the forecast up to date when a forecast screen opens. The service returns the saved run
+   * when nothing changed, so this makes a new run only on a new day or after the data changed.
+   */
+  autoUpdateForecast: () => Promise<void>
   setImportStatus: (id: string, status: ImportRecord["status"]) => boolean
   changeRole: (targetId: string, next: Role) => string | null
   deactivateUser: (targetId: string) => string | null
@@ -67,6 +72,8 @@ export interface AppState {
   accessLog: AccessChange[]; users: User[]; imports: ImportRecord[]
   bankAccount: BankAccount | null; dailySales: DailySale[]; cheques: Cheque[]; transactions: BankTransaction[]
   forecast: ForecastResult; forecastInfo: ForecastInfo | null
+  /** The automatic update started when a forecast screen opens (live only); error is why it failed. */
+  forecastAutoUpdate: { updating: boolean; error: string | null }
   /** Demo only: inputs of the demonstration forecast, for the deferred (unrouted) Scenario Analysis page. */
   forecastInputs?: Parameters<typeof buildForecast>[0]
   kpis: Kpis
@@ -81,6 +88,14 @@ export function useAppState() {
   const v = useContext(Ctx)
   if (!v) throw new Error("useAppState must be used inside an app state provider")
   return v
+}
+
+export const AUTO_IDLE = { updating: false, error: null }
+
+/** Forecast screens call this so the forecast is calculated again each day and after data changes. */
+export function useAutoForecast() {
+  const { mode, actions } = useAppState()
+  useEffect(() => { if (mode === "live") void actions.autoUpdateForecast() }, [mode, actions])
 }
 
 const READY: ResourceState = { loading: false, error: null }
@@ -166,6 +181,7 @@ function useDemoStateValue(initialUserId: string | null): AppState {
         return null
       },
       refreshForecast: async () => null,
+      autoUpdateForecast: async () => {},
       setImportStatus: (id, status) => {
         if (!can(role, "import.approve")) return false
         setImports((rows) => rows.map((r) => (r.import_id === id ? { ...r, status, approved_by: currentUser?.name ?? "", approved_at: seed.NOW } : r)))
@@ -204,7 +220,7 @@ function useDemoStateValue(initialUserId: string | null): AppState {
     signedIn: !!currentUser, sessionLoading: false, role, roleLabel: role ? ROLE_LABEL[role] : "", currentUser,
     company: { id: "demo", name: companyName }, companies: [],
     allow, canPage, accessLog, users, imports,
-    bankAccount, dailySales, cheques, transactions, forecast, forecastInfo: null, forecastInputs, kpis,
+    bankAccount, dailySales, cheques, transactions, forecast, forecastInfo: null, forecastAutoUpdate: AUTO_IDLE, forecastInputs, kpis,
     resources: { sales: READY, bank: READY, cheques: READY, forecast: READY }, reload: () => {},
     actions,
   }

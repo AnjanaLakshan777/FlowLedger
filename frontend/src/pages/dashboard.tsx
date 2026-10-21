@@ -4,7 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useAppState } from "@/components/app/app-state"
+import { useAppState, useAutoForecast } from "@/components/app/app-state"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { DataState, useNotReady } from "@/components/app/data-state"
 import { KpiCard } from "@/components/app/kpi-card"
@@ -22,6 +22,7 @@ import { addDays, daysBetween, fmt } from "@/lib/format"
 
 export default function DashboardPage() {
   const { kpis, forecast, cheques, transactions, bankAccount: acct, allow, today: TODAY, mode, forecastInfo } = useAppState()
+  useAutoForecast()
   const live = mode === "live"
   const run = forecastInfo?.run
   const horizon = live ? "84 days" : `${FORECAST_WEEKS} weeks`
@@ -142,7 +143,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard forecast label="Cheques clearing next 7 days" icon={FileText} amount={kpis.cheques7dAmount} sub={`${kpis.cheques7dCount} cheques · to ${fmt.short(addDays(TODAY, 7))}`} />
         {kpis.forecastReceipts == null
-          ? <KpiCard forecast label="Expected receipts" icon={TrendingUp} value={run ? "Not estimated" : "No forecast"} sub={run ? "Too little bank history" : "Cash + card, by current-account arrival date"} />
+          ? <KpiCard forecast label="Expected receipts" icon={TrendingUp} value={run ? "Not estimated" : "No forecast"} sub={run ? "Too little sales or bank history" : "Cash + card, by current-account arrival date"} />
           : <KpiCard forecast label="Expected receipts" icon={TrendingUp} amount={kpis.forecastReceipts} sub="Cash + card, by current-account arrival date" />}
         {kpis.forecastOutflow == null
           ? <KpiCard forecast label="Expected cheque outflows" icon={FileText} value="No forecast" sub="Scheduled cheques, on their expected clearing dates" />

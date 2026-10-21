@@ -6,7 +6,7 @@ import { ApiError, errorMessage, session } from "@/lib/api/client"
 import { flowledger, type CompanyRole, type CurrentUser, type ForecastRun, type ForecastRunSummary } from "@/lib/api/flowledger"
 import { addDays, sum } from "@/lib/format"
 import { can, canAccessPage, type PageId, type Permission } from "@/lib/permissions"
-import { Ctx, type AppActions, type AppState, type Kpis, type Resource, type ResourceState } from "./app-state"
+import { AUTO_IDLE, Ctx, type AppActions, type AppState, type Kpis, type Resource, type ResourceState } from "./app-state"
 
 /**
  * The company admin role uses the UI's administrator permission set (labelled "System Admin" in
@@ -41,6 +41,9 @@ function useLiveStateValue(): AppState {
   const [cheques, setCheques] = useState<Cheque[]>([])
   const [forecastData, setForecastData] = useState<ForecastData>({ run: null, runs: [] })
   const [outdated, setOutdated] = useState(false)
+  const [autoUpdate, setAutoUpdate] = useState<AppState["forecastAutoUpdate"]>(AUTO_IDLE)
+  const autoBusy = useRef(false)
+  const shownRunId = useRef<string | null>(null)
   const generation = useRef(0) // answers that arrive after sign-out or a company switch are dropped
 
   const membership = me?.memberships.find((m) => m.companyId === companyId) ?? me?.memberships[0] ?? null
@@ -52,7 +55,7 @@ function useLiveStateValue(): AppState {
   const reset = useCallback(() => {
     generation.current++
     setMe(null); setSales([]); setBank({ account: null, transactions: [] }); setCheques([]); setForecastData({ run: null, runs: [] })
-    setResources(NOT_LOADED); setOutdated(false)
+    setResources(NOT_LOADED); setOutdated(false); setAutoUpdate(AUTO_IDLE)
   }, [])
 
   const signOut = useCallback(() => { session.clear(); reset(); setSessionLoading(false) }, [reset])
@@ -104,7 +107,10 @@ function useLiveStateValue(): AppState {
       } else {
         const runs = await flowledger.forecastRuns(cid)
         const run = runs[0] ? await flowledger.forecastRun(cid, runs[0].id) : null
-        if (gen === generation.current) setForecastData({ run, runs })
+        if (gen === generation.current) {
+          shownRunId.current = run?.run.id ?? null
+          setForecastData({ run, runs })
+        }
       }
       if (gen === generation.current) setResources((r) => ({ ...r, [resource]: IDLE }))
     } catch (e) {
@@ -183,7 +189,7 @@ function useLiveStateValue(): AppState {
         try { localStorage.setItem(COMPANY_KEY, id) } catch { /* not remembered */ }
         generation.current++
         setSales([]); setBank({ account: null, transactions: [] }); setCheques([]); setForecastData({ run: null, runs: [] }); setOutdated(false)
-        setResources(NOT_LOADED)
+        setResources(NOT_LOADED); setAutoUpdate(AUTO_IDLE); shownRunId.current = null
         setCompanyId(id)
       },
       saveSale: async (s) => {
@@ -200,13 +206,30 @@ function useLiveStateValue(): AppState {
       updateCheque: (original, c) =>
         run(() => flowledger.updateCheque(cid!, original.id!, toChequeRequest({ ...c, id: original.id, version: original.version })), chequesChanged),
       cancelCheque: (c, reason) => run(() => flowledger.cancelCheque(cid!, c.id!, reason, c.version!), chequesChanged),
-      refreshForecast: () => run(() => flowledger.createForecast(cid!), () => { setOutdated(false); reload("forecast") }),
+      refreshForecast: () => run(() => flowledger.createForecast(cid!), () => { setOutdated(false); setAutoUpdate(AUTO_IDLE); reload("forecast") }),
+      autoUpdateForecast: async () => {
+        if (!cid || !canPage("forecast") || autoBusy.current) return
+        autoBusy.current = true
+        const gen = generation.current
+        setAutoUpdate({ updating: true, error: null })
+        try {
+          const made = await flowledger.createForecast(cid)
+          if (gen !== generation.current) return
+          setAutoUpdate(AUTO_IDLE)
+          // The same run comes back when nothing changed since it was made.
+          if (made.run.id !== shownRunId.current) { setOutdated(false); reload("forecast") }
+        } catch (e) {
+          if (gen === generation.current) setAutoUpdate({ updating: false, error: errorMessage(e) })
+        } finally {
+          autoBusy.current = false
+        }
+      },
       setImportStatus: () => false,
       changeRole: unsupported,
       deactivateUser: unsupported,
       createUser: unsupported,
     }
-  }, [cid, reload, loadMe, signOut])
+  }, [cid, canPage, reload, loadMe, signOut])
 
   const currentUser: User | null = me
     ? { user_id: me.userId, name: me.fullName, email: me.email, role: role ?? "CASHIER", status: "Active", created_at: "" }
@@ -219,7 +242,7 @@ function useLiveStateValue(): AppState {
     company, companies: (me?.memberships ?? []).map((m) => ({ id: m.companyId, name: m.companyName, roleLabel: ROLE_NAME[m.companyRole] })),
     allow, canPage, accessLog: [], users: [], imports: [],
     bankAccount: bank.account, dailySales: sales, cheques, transactions: bank.transactions,
-    forecast, forecastInfo: runSummary ? { run: runSummary, runs: forecastData.runs, outdated } : null,
+    forecast, forecastInfo: runSummary ? { run: runSummary, runs: forecastData.runs, outdated } : null, forecastAutoUpdate: autoUpdate,
     kpis, resources, reload, actions,
   }
 }

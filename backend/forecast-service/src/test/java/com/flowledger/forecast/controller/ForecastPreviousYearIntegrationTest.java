@@ -131,13 +131,49 @@ class ForecastPreviousYearIntegrationTest {
         List<String> requests = sources.requests();
         assertThat(requests.stream().filter(r -> r.startsWith(FakeSourceServices.salesHistoryPath(companyId)))
                 .map(FakeSourceServices::params).toList())
-                .containsExactly(Map.of("from", "2025-08-20", "to", "2026-01-06"));
+                // Up to the day before the balance date: this year's sales received by then (lag 1).
+                .containsExactly(Map.of("from", "2025-08-20", "to", "2026-10-13"));
         assertThat(requests.stream().filter(r -> r.startsWith(FakeSourceServices.transactionsPath(companyId)))
                 .map(FakeSourceServices::params).map(p -> p.get("from") + "/" + p.get("to")).toList())
                 .containsExactly("2026-08-20/2026-10-14", "2025-08-21/2026-01-07");
         assertThat(sources.lastAuthorization()).isEqualTo("Bearer " + USER_TOKEN);
-        // Daily sales entered by hand are never read.
+        // Manual daily sales arrive through the sales history; the Daily Sales list API is not read.
         assertThat(requests).noneMatch(r -> r.contains("/sales?") || r.endsWith("/sales"));
+    }
+
+    @Test
+    void shouldMeasureGrowthFromDailySalesWhenNoStatementCoversThisYear() throws Exception {
+        sources.statements(companyId, accountId);
+        transactions.clear();
+        sources.transactions(companyId, transactions);
+        // Last year from the approved import; this year's growth window from sales entered by hand,
+        // received a day after each sale date (19 August to 13 October 2026).
+        List<String> days = new ArrayList<>(sales(date -> new String[]{"1000.00", "2000.00"}));
+        for (LocalDate sale = WINDOW_FROM.minusDays(1); sale.isBefore(BALANCE_DATE); sale = sale.plusDays(1)) {
+            days.add(FakeSourceServices.manualSale(sale, "1200.00", "2000.00"));
+        }
+        sources.salesHistory(companyId, days);
+
+        create().andExpect(status().isCreated())
+                .andExpect(jsonPath("$.run.inflowEstimateStatus").value("ESTIMATED"))
+                .andExpect(jsonPath("$.run.dataQuality.pattern.cashGrowthRatio").value(1.2))
+                .andExpect(jsonPath("$.run.dataQuality.pattern.cardGrowthRatio").value(1.0))
+                .andExpect(jsonPath("$.run.dataQuality.pattern.currentFromSales").value(2 * 56))
+                .andExpect(jsonPath("$.run.dataQuality.pattern.currentFromBank").value(0))
+                .andExpect(jsonPath("$.run.warnings[*].code", hasItem("GROWTH_FROM_SALES_RECORDS")))
+                .andExpect(jsonPath("$.days[0].expectedCashSalesDeposits").value(1200.0))
+                .andExpect(jsonPath("$.days[0].expectedCardSalesSettlements").value(2000.0));
+    }
+
+    @Test
+    void shouldNotEstimateInflowsWithoutStatementsOrDailySalesThisYear() throws Exception {
+        sources.statements(companyId, accountId);
+        transactions.clear();
+        sources.transactions(companyId, transactions);
+
+        create().andExpect(status().isCreated())
+                .andExpect(jsonPath("$.run.inflowEstimateStatus").value("INSUFFICIENT_HISTORY"))
+                .andExpect(jsonPath("$.run.dataQuality.pattern.insufficientReason").value("NOT_ENOUGH_COMPARABLE_DAYS"));
     }
 
     @Test
@@ -218,6 +254,16 @@ class ForecastPreviousYearIntegrationTest {
                 + approvedSale(LocalDate.of(2024, 1, 1), "1.00", "1.00", BATCH) + "]}");
         refused();
 
+        // A manual entry never names an import batch, and an import row always does.
+        sources.reply(FakeSourceServices.salesHistoryPath(companyId), 200, "{\"days\": ["
+                + approvedSale(LocalDate.of(2025, 9, 1), "1.00", "1.00", BATCH).replace("HISTORICAL_IMPORT", "UI") + "]}");
+        refused();
+
+        sources.reply(FakeSourceServices.salesHistoryPath(companyId), 200, "{\"days\": ["
+                + FakeSourceServices.manualSale(LocalDate.of(2025, 9, 1), "1.00", "1.00").replace("\"UI\"", "\"HISTORICAL_IMPORT\"")
+                + "]}");
+        refused();
+
         sources.reply(FakeSourceServices.salesHistoryPath(companyId), 200, "{}");
         refused();
 
@@ -283,7 +329,7 @@ class ForecastPreviousYearIntegrationTest {
 
     private void refused() throws Exception {
         create().andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.detail").value("Approved sales history could not be loaded. Please try again later."));
+                .andExpect(jsonPath("$.detail").value("Sales history could not be loaded. Please try again later."));
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM forecast_runs WHERE company_id = ?",
                 Integer.class, companyId)).isZero();
     }

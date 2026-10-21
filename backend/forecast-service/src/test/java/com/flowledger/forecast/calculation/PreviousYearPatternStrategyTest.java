@@ -1,6 +1,6 @@
 package com.flowledger.forecast.calculation;
 
-import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.ApprovedSale;
+import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.RecordedSale;
 import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.Inputs;
 import com.flowledger.forecast.calculation.PreviousYearPatternStrategy.Result;
 import com.flowledger.forecast.entity.PatternQuality;
@@ -218,10 +218,10 @@ class PreviousYearPatternStrategyTest {
         assertThat(result.quality().missingReferenceDays()).isEqualTo(1);
     }
 
-    // Approved historical sales
+    // Recorded sales (approved imports and daily sales)
 
     @Test
-    void shouldUseApprovedSalesWithTheReceiptLagWhereNoStatementCoversTheDay() {
+    void shouldUseRecordedSalesWithTheReceiptLagWhereNoStatementCoversTheDay() {
         ForecastParameters lags = new ForecastParameters(PreviousYearPatternStrategy.CODE, 8, 4, 3, 1, 3,
                 new BigDecimal("0.5"), new BigDecimal("2.0"));
         Fixture fixture = new Fixture()
@@ -281,16 +281,56 @@ class PreviousYearPatternStrategyTest {
     }
 
     @Test
-    void shouldMeasureGrowthOnlyAgainstBankConfirmedCurrentYearCollections() {
-        // Sales imported for this year's window do not count as this year's collections.
+    void shouldMeasureGrowthFromRecordedSalesWhereNoStatementCoversTheCurrentYearDay() {
+        // No statement this year: the daily sales (received a day after the sale date) are this year's collections.
         Fixture fixture = new Fixture()
+                .previousYearBank(day -> "100.00", day -> "100.00");
+        growthWindow().forEach(day -> fixture.sales.put(day.minusDays(1), sale(day.minusDays(1), "300.00", "150.00")));
+
+        Result result = fixture.estimate();
+
+        assertThat(result.estimate().status()).isEqualTo(InflowEstimateStatus.ESTIMATED);
+        ExpectedInflow expected = result.estimate().on(horizon().getFirst()).orElseThrow();
+        assertThat(expected.cashSalesDeposits()).isEqualByComparingTo("300.00");
+        assertThat(expected.cardSalesSettlements()).isEqualByComparingTo("150.00");
+        assertThat(result.quality().cashGrowthRatio()).isEqualByComparingTo("3.0000");
+        assertThat(result.quality().cardGrowthRatio()).isEqualByComparingTo("1.5000");
+        assertThat(result.quality().comparableCashDays()).isEqualTo(56);
+        assertThat(result.quality().currentFromSales()).isEqualTo(2 * 56);
+        assertThat(result.quality().currentFromBank()).isZero();
+    }
+
+    @Test
+    void shouldPreferThisYearsBankFiguresOverRecordedSalesAndNeverAddThem() {
+        Fixture fixture = new Fixture()
+                .currentYear(day -> "200.00", day -> "200.00")
                 .previousYearBank(day -> "100.00", day -> "100.00");
         growthWindow().forEach(day -> fixture.sales.put(day.minusDays(1), sale(day.minusDays(1), "900.00", "900.00")));
 
         Result result = fixture.estimate();
 
-        assertThat(result.estimate().status()).isEqualTo(InflowEstimateStatus.INSUFFICIENT_HISTORY);
-        assertThat(result.quality().comparableCashDays()).isZero();
+        ExpectedInflow expected = result.estimate().on(horizon().getFirst()).orElseThrow();
+        // Ratio 200 / 100, not (200 + 900) / 100 or 900 / 100.
+        assertThat(expected.cashSalesDeposits()).isEqualByComparingTo("200.00");
+        assertThat(result.quality().currentFromBank()).isEqualTo(2 * 56);
+        assertThat(result.quality().currentFromSales()).isZero();
+    }
+
+    @Test
+    void shouldMixBankAndRecordedSalesDaysInTheGrowthWindow() {
+        // Statements cover the first four weeks of the window; daily sales cover the rest.
+        Fixture fixture = new Fixture()
+                .previousYearBank(day -> "100.00", day -> "100.00");
+        List<LocalDate> window = growthWindow();
+        window.subList(0, 28).forEach(day -> fixture.bank(day, d -> "100.00", d -> "100.00"));
+        window.subList(28, 56).forEach(day -> fixture.sales.put(day.minusDays(1), sale(day.minusDays(1), "300.00", "300.00")));
+
+        Result result = fixture.estimate();
+
+        // (28 x 100 + 28 x 300) / (56 x 100) = 2.
+        assertThat(result.quality().cashGrowthRatio()).isEqualByComparingTo("2.0000");
+        assertThat(result.quality().currentFromBank()).isEqualTo(2 * 28);
+        assertThat(result.quality().currentFromSales()).isEqualTo(2 * 28);
     }
 
     // Helpers
@@ -307,8 +347,8 @@ class PreviousYearPatternStrategyTest {
         return BigDecimal.valueOf((long) day.getDayOfWeek().getValue() * step).setScale(2).toPlainString();
     }
 
-    private static ApprovedSale sale(LocalDate date, String cash, String card) {
-        return new ApprovedSale(date, new BigDecimal(cash), new BigDecimal(card), BATCH);
+    private static RecordedSale sale(LocalDate date, String cash, String card) {
+        return new RecordedSale(date, new BigDecimal(cash), new BigDecimal(card), BATCH);
     }
 
     /** Builds inputs: covered days with bank credits this year and last year, and approved sales. */
@@ -317,7 +357,7 @@ class PreviousYearPatternStrategyTest {
         final Set<LocalDate> covered = new HashSet<>();
         final Map<LocalDate, BigDecimal> cash = new HashMap<>();
         final Map<LocalDate, BigDecimal> card = new HashMap<>();
-        final Map<LocalDate, ApprovedSale> sales = new HashMap<>();
+        final Map<LocalDate, RecordedSale> sales = new HashMap<>();
 
         Fixture currentYear(Function<LocalDate, String> cashOn, Function<LocalDate, String> cardOn) {
             growthWindow().forEach(day -> bank(day, cashOn, cardOn));

@@ -9,7 +9,7 @@ public class SalesHistoryUnavailableException extends ErrorResponseException {
     public SalesHistoryUnavailableException() {
         super(HttpStatus.SERVICE_UNAVAILABLE,
                 ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
-                        "Approved sales history could not be loaded. Please try again later."),
+                        "Sales history could not be loaded. Please try again later."),
                 null);
     }
 }
