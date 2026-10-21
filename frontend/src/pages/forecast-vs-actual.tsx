@@ -63,12 +63,14 @@ function useComparison(runId: string | null) {
 }
 
 export default function ForecastVsActualPage() {
-  const { mode, forecastInfo } = useAppState()
+  const { mode, forecastInfo, today } = useAppState()
   const live = mode === "live"
   const runsNotReady = useNotReady(["forecast"])
   const runs = forecastInfo?.runs ?? []
   const [runId, setRunId] = useState<string | null>(null)
-  const selected = runId ?? runs[0]?.id ?? null
+  // Only days before today can have an imported statement, so a forecast starting today or later has nothing to compare yet.
+  const comparable = (r: { horizonStartDate: string }) => r.horizonStartDate < today
+  const selected = runId ?? runs.find(comparable)?.id ?? runs[0]?.id ?? null
   const comparison = useComparison(live ? selected : null)
   const all = live ? comparison.data?.rows ?? [] : demoRows
 
@@ -117,7 +119,7 @@ export default function ForecastVsActualPage() {
             <SelectContent>
               {runs.map((r) => (
                 <SelectItem key={r.id} value={r.id}>
-                  {fmt.range(r.horizonStartDate, r.horizonEndDate)} · made {fmt.dateTime(colomboLocal(r.createdAt))}
+                  {fmt.range(r.horizonStartDate, r.horizonEndDate)} · made {fmt.dateTime(colomboLocal(r.createdAt))}{!comparable(r) && " · nothing to compare yet"}
                 </SelectItem>
               ))}
             </SelectContent>

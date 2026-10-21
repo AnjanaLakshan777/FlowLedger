@@ -1536,8 +1536,10 @@ retry; the frontend never falls back to demonstration data.
 - A missing confirmed balance is shown as "No confirmed balance yet", never
   as 0. Expected receipts that were not estimated are shown as "Not
   estimated".
-- Forecast vs Actual compares one saved run, chosen by the user (newest
-  first by default), because the baseline-run rule is open.
+- Forecast vs Actual compares one saved run, chosen by the user, because the
+  baseline-run rule is open. By default it is the newest run that started
+  before today (only past days can have imported statements); runs starting
+  today or later are listed as "nothing to compare yet".
 - Historical Sales Import is live: template download, CSV upload with the
   server's validation results, issues and all-rows preview, import history,
   and approval or rejection for Finance Controllers and Company Admins. Actions follow the
