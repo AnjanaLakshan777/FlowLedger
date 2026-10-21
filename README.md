@@ -26,11 +26,16 @@
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Containers-Docker-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
 </p>
 
+<p align="center">
+  <img alt="FlowLedger Dashboard showing the Actual Bank Balance and upcoming Cash Shortage warnings" src="docs/screenshots/dashboard-cash-shortage-warnings.png" width="900">
+</p>
+
 ---
 
 ## Contents
 
 - [Why FlowLedger?](#why-flowledger)
+- [Product tour](#product-tour)
 - [Core capabilities](#core-capabilities)
 - [How forecasting works](#how-forecasting-works)
 - [Architecture](#architecture)
@@ -61,6 +66,99 @@ expected cheque payments to help Finance Controllers answer three practical ques
 
 FlowLedger is a cash-flow coordination and forecasting product — not a full accounting system, ERP,
 payroll system, or payment-execution platform.
+
+<a id="product-tour"></a>
+
+## 🖥️ Product tour
+
+The screenshots below follow a typical working day for a Finance Controller: sign in, check the
+Dashboard, record sales, review cheques, then plan ahead with the forecast. Sample data belongs to a
+demo company (ABC Private (Ltd)).
+
+### 1. Sign in
+
+Users sign in with the work email their Company Admin invited. Sessions are short-lived and the
+password is never stored in the browser.
+
+<p align="center">
+  <img alt="FlowLedger sign-in screen" src="docs/screenshots/sign-in.png" width="850">
+</p>
+
+### 2. Dashboard — cash position and shortage warnings
+
+The Dashboard opens with the **Actual Bank Balance** (bank-confirmed only) and lists every forecast date
+on which the current account is expected to run short. Each warning explains the day step by step:
+opening balance, expected receipts, the cheques clearing that day, and the resulting shortage.
+
+<p align="center">
+  <img alt="Dashboard listing upcoming Cash Shortage warnings with the cheques that cause them" src="docs/screenshots/dashboard-cash-shortage-warnings.png" width="850">
+</p>
+
+Further down, the forecast summary shows cheques clearing in the next 7 days, total expected receipts
+and cheque outflows, the expected closing balance, and an 84-day chart of weekly closing balances. The
+white line marks each week's lowest daily balance, so a week can close positive and still be short
+during the week. Dashed borders and the **Forecast** label mark figures that are expected, not yet in
+the bank.
+
+<p align="center">
+  <img alt="Dashboard forecast summary with the 84-day weekly cash-flow chart and upcoming cheque payments" src="docs/screenshots/dashboard-forecast-summary.png" width="850">
+</p>
+
+### 3. Daily Sales
+
+Cashiers and finance staff record each day's cash sales and card payments. The sales date is the day
+the sales happened; the entry time is recorded automatically, and backdated entries are allowed but
+marked as backdated. Sales entries are sales records — they never change the Actual Bank Balance.
+
+<p align="center">
+  <img alt="Daily Sales entry form and list of sales entries" src="docs/screenshots/daily-sales.png" width="850">
+</p>
+
+### 4. Historical Sales Import
+
+A one-time CSV upload of past daily sales gives the forecast history to learn from. The file moves
+through four visible steps — upload, validate, preview, and Finance Controller approval — and only an
+approved import is used for forecasting.
+
+<p align="center">
+  <img alt="Historical Sales Import with validation results and Finance Controller approval" src="docs/screenshots/historical-sales-import.png" width="850">
+</p>
+
+### 5. Cheque Payments
+
+Every future cheque is recorded with its payee, category, amount, issue date, and expected clearing
+date. The forecast deducts each scheduled cheque on its expected clearing date only; cancelled cheques
+are not counted. Recording a cheque never changes the Actual Bank Balance.
+
+<p align="center">
+  <img alt="Cheque Payments list with upcoming totals and filters" src="docs/screenshots/cheque-payments.png" width="850">
+</p>
+
+### 6. Cash-Flow Forecast
+
+The forecast calendar shows the expected closing balance for every day of the 12-week horizon. Days
+with a Cash Shortage are highlighted in red, and icons show what moves money that day: expected cash
+deposits, card settlements, and scheduled cheques. Selecting a day opens its breakdown, with a shortcut
+to add a cheque payment on that date.
+
+<p align="center">
+  <img alt="Cash-Flow Forecast month calendar with Cash Shortage days and the selected day's breakdown" src="docs/screenshots/cash-flow-forecast-calendar.png" width="850">
+</p>
+
+### 7. Forecast vs Actual
+
+A saved forecast is compared with what the bank later confirmed, in 7-day periods from the forecast
+start. Only days covered by an imported bank statement are compared, so the receipts and payments
+differences show how accurate the forecast really was.
+
+<p align="center">
+  <img alt="Forecast vs Actual comparison of forecast closing balance and Actual Bank Balance by period" src="docs/screenshots/forecast-vs-actual.png" width="850">
+</p>
+
+### 8. Users & Settings
+
+Company Admins invite users, assign roles, and manage company and bank account settings. The
+permissions matrix is shown in [Roles and access](#roles-and-access).
 
 <a id="core-capabilities"></a>
 
@@ -282,6 +380,13 @@ authorization.
 | `FINANCE_CONTROLLER` | Review and approve historical imports, manage cheques, and use financial forecasting workflows. |
 | `COMPANY_ADMIN` | Administer company-level access and permitted company configuration, and approve historical imports. |
 | `SYSTEM_ADMIN` | Administer platform-level users, roles, and system configuration, subject to business-data membership boundaries. |
+
+Company Admins can see what each company role is allowed to do under **Users & Settings → Roles &
+permissions**:
+
+<p align="center">
+  <img alt="Roles and permissions matrix for Cashier, Accountant, Finance Controller, and Company Admin" src="docs/screenshots/roles-and-permissions.png" width="850">
+</p>
 
 Exact permissions are defined by backend authorization rules and may vary by endpoint. Always refer to
 the current API implementation for authoritative access behaviour.
