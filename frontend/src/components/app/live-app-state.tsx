@@ -85,8 +85,10 @@ function useLiveStateValue(): AppState {
     setResources((r) => ({ ...r, [resource]: LOADING }))
     try {
       if (resource === "sales") {
-        const rows = await flowledger.sales(cid)
-        if (gen === generation.current) setSales(rows.map((s) => toDailySale(s, me?.userId ?? null)).sort((a, b) => b.sales_date.localeCompare(a.sales_date)))
+        // Names only label who recorded a day; without them the screen still works and says "Another user".
+        const [rows, members] = await Promise.all([flowledger.sales(cid), flowledger.memberNames(cid).catch(() => [])])
+        const names = new Map(members.map((m) => [m.userId, m.fullName]))
+        if (gen === generation.current) setSales(rows.map((s) => toDailySale(s, me?.userId ?? null, names)).sort((a, b) => b.sales_date.localeCompare(a.sales_date)))
       } else if (resource === "bank") {
         const accounts = await flowledger.bankAccounts(cid)
         const current = accounts.find((a) => a.accountType === "CURRENT" && a.status === "ACTIVE")

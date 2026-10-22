@@ -2,6 +2,7 @@ package com.flowledger.identity.service;
 
 import com.flowledger.identity.dto.CreateMembershipRequest;
 import com.flowledger.identity.dto.CreateMembershipResponse;
+import com.flowledger.identity.dto.MemberNameResponse;
 import com.flowledger.identity.dto.MembershipResponse;
 import com.flowledger.identity.dto.UpdateMembershipRequest;
 import com.flowledger.identity.entity.AccountStatus;
@@ -58,6 +59,19 @@ public class MembershipManagementService {
         }
         return membershipRepository.findAllInCompany(companyId).stream()
                 .map(MembershipResponse::from)
+                .toList();
+    }
+
+    /**
+     * Names of everyone who is or was a member of the company, for any member of it (and a
+     * platform admin), so screens can say who recorded something. Former and suspended members
+     * stay listed, since their earlier records still show their name.
+     */
+    @Transactional(readOnly = true)
+    public List<MemberNameResponse> listMemberNames(UUID actorId, UUID companyId) {
+        adminAuthorizationService.requireCompanyAccess(actorId, companyId);
+        return membershipRepository.findAllInCompany(companyId).stream()
+                .map(MemberNameResponse::from)
                 .toList();
     }
 

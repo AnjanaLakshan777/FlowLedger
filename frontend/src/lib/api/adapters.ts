@@ -61,13 +61,22 @@ export const toChequeRequest = (c: Cheque): ChequeRequest => ({
   expectedClearingDate: c.expected_clear_date, notes: c.notes.trim() || null, version: c.version,
 })
 
-export function toDailySale(s: ApiDailySale, currentUserId: string | null): DailySale {
+/**
+ * Who recorded something, by the company's member names (identity-service); the sales API returns the user's ID only.
+ * The signed-in user is marked "(you)"; an unknown ID, or names that could not be loaded, read "Another user".
+ */
+export function personName(userId: string | null, currentUserId: string | null, names: ReadonlyMap<string, string>): string {
+  const name = userId ? names.get(userId) : undefined
+  if (userId && userId === currentUserId) return name ? `${name} (you)` : "You"
+  return name ?? "Another user"
+}
+
+export function toDailySale(s: ApiDailySale, currentUserId: string | null, names: ReadonlyMap<string, string> = new Map()): DailySale {
   const enteredAt = colomboLocal(s.recordedAt)
   return {
     sales_date: s.saleDate, cash_sales: s.cashSalesAmount, card_sales: s.cardSalesAmount, total: s.totalSalesAmount,
     entered_at: enteredAt,
-    // The sales API returns the recording user's ID only, not a name.
-    entered_by: s.recordedBy === currentUserId ? "You" : "Another user",
+    entered_by: personName(s.recordedBy, currentUserId, names),
     // Imported history is entered long after the sale date by design; it is not a backdated entry.
     entry_type: s.entrySource === "HISTORICAL_IMPORT" ? "Imported" : daysBetween(s.saleDate, enteredAt.slice(0, 10)) >= 2 ? "Backdated" : "Standard",
     note: "", id: s.id, version: s.version, corrected_at: s.updatedAt ? colomboLocal(s.updatedAt) : null,

@@ -182,6 +182,8 @@ export const flowledger = {
   me: () => api<CurrentUser>(`${identity}/me`),
 
   memberships: (c: string) => api<ApiMembership[]>(`${identity}/companies/${c}/memberships`),
+  /** Every member's name (no email), readable by any member: who recorded or changed something. */
+  memberNames: (c: string) => api<{ userId: string; fullName: string }[]>(`${identity}/companies/${c}/member-names`),
   createMembership: (c: string, body: CreateMembershipRequest) =>
     api<{ membership: ApiMembership; accountCreated: boolean }>(`${identity}/companies/${c}/memberships`, { method: "POST", json: body }),
   updateMembership: (c: string, id: string, body: { companyRole?: CompanyRole; status?: "ACTIVE" | "SUSPENDED" }) =>

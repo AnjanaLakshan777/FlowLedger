@@ -372,6 +372,14 @@ Confirmed by the product owner on 2026-10-17. The same company
 administration as above (active `SYSTEM_ADMIN` in any company, or active
 `COMPANY_ADMIN` in their own) is required unless noted.
 
+- Member names (2026-10-22): `GET /api/v1/identity/companies/{companyId}/member-names`
+  → `[{userId, fullName}]` for every member of the company, including
+  invited, suspended, and removed ones (their earlier records still show
+  their name). Readable by anyone with company access (an active member of
+  any role, or an active `SYSTEM_ADMIN`); 403 otherwise. Names only, no
+  email, role, or status. The product owner asked for recorder names to be
+  shown, so members seeing each other's names is accepted.
+
 - `POST /api/v1/identity/companies/{companyId}/memberships`
   `{email, fullName, companyRole, temporaryPassword?}` → 201
   `{membership, accountCreated}`. Any company role may be given. There is no
@@ -1717,8 +1725,10 @@ retry; the frontend never falls back to demonstration data.
 
 ### Known Limitations
 
-- Daily sales have no note and no recorder name in the API; the screen shows
-  "You" or "Another user", and a recorded date cannot be changed. Daily
+- Daily sales have no note in the API, and a recorded date cannot be
+  changed. "Entered by" shows the member's name (2026-10-22), from
+  identity-service's member names, with "(you)" for the signed-in user;
+  "Another user" only when the name cannot be loaded. Daily
   Sales has a "Correct" action (Accountant and above) on days entered by
   hand, asking for the amounts and a reason, and marks corrected days;
   Historical Sales Import has "Reverse import" on approved imports (Finance
@@ -1938,8 +1948,9 @@ The following must be researched or agreed before implementation:
   tokens early (it would then need the token key or a public-key setup).
 - Token lifetime handling in the browser: there are no refresh tokens, so a
   user signs in again after the access token expires.
-- Whether daily sales carry a note, and whether other users may see who
-  recorded them (the API has no name).
+- Whether daily sales carry a note. Other screens (historical imports,
+  bank and cheque history) still show "You" or "Another user" instead of
+  member names.
 - An API listing companies for a platform administrator, and invitation by
   email (users are created with a temporary password for now).
 - Historical sales import: whether an import's invalid rows may be left out

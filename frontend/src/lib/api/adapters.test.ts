@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { colomboLocal, colomboToday, forecastFromRun, forecastVsActualWeeks, toBankAccount, toCheque, toChequeRequest, toDailySale, toTransaction } from "./adapters"
+import { colomboLocal, colomboToday, forecastFromRun, forecastVsActualWeeks, personName, toBankAccount, toCheque, toChequeRequest, toDailySale, toTransaction } from "./adapters"
 import type { ApiBankAccount, ForecastRun, ForecastRunDay, ForecastVsActual } from "./flowledger"
 
 // Shapes as the services return them (taken from the end-to-end run; fictional test data).
@@ -95,6 +95,15 @@ describe("records", () => {
     const s = toDailySale({ id: "s", companyId: "c", saleDate: "2025-01-01", cashSalesAmount: 1, cardSalesAmount: 2, totalSalesAmount: 3,
       entrySource: "HISTORICAL_IMPORT", recordedBy: "u2", recordedAt: "2026-10-14T04:00:00Z", updatedBy: null, updatedAt: null, version: 1 }, "u1")
     expect(s).toMatchObject({ entry_type: "Imported", entered_by: "Another user", total: 3 })
+  })
+
+  it("shows who recorded a day by name, marking the signed-in user", () => {
+    const names = new Map([["u1", "Anjana Lakshan"], ["u2", "Ruvini Perera"]])
+    expect(personName("u2", "u1", names)).toBe("Ruvini Perera")
+    expect(personName("u1", "u1", names)).toBe("Anjana Lakshan (you)")
+    // Unknown or not loaded: never a wrong name.
+    expect(personName("u3", "u1", names)).toBe("Another user")
+    expect(personName("u1", "u1", new Map())).toBe("You")
   })
 
   it("uses the Asia/Colombo date", () => {

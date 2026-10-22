@@ -217,6 +217,36 @@ class MembershipManagementIntegrationTest {
         assertThat(membershipColumn(invitedMembership, "status")).isEqualTo("INVITED");
     }
 
+    // Member names
+
+    @Test
+    void shouldLetEveryMemberReadMemberNamesOnly() throws Exception {
+        UUID cashier = identities.member(companyId, "CASHIER");
+        jdbcTemplate.update("UPDATE users SET full_name = 'Ruvini Perera' WHERE id = ?", cashier);
+
+        mockMvc.perform(get("/api/v1/identity/companies/" + companyId + "/member-names")
+                        .header(HttpHeaders.AUTHORIZATION, identities.bearerToken(cashier)))
+                .andExpect(status().isOk())
+                // The admin, the invited Accountant, and the Cashier: former and pending members keep their names.
+                .andExpect(jsonPath("$", hasSize(3)))
+                .andExpect(jsonPath("$[*].userId").value(hasItem(invitedUser.toString())))
+                .andExpect(jsonPath("$[*].fullName").value(hasItem("Ruvini Perera")))
+                .andExpect(jsonPath("$[0].email").doesNotExist())
+                .andExpect(jsonPath("$[0].companyRole").doesNotExist());
+    }
+
+    @Test
+    void shouldKeepMemberNamesInsideTheCompany() throws Exception {
+        UUID outsider = identities.member(otherCompanyId, "COMPANY_ADMIN");
+        mockMvc.perform(get("/api/v1/identity/companies/" + companyId + "/member-names")
+                        .header(HttpHeaders.AUTHORIZATION, identities.bearerToken(outsider)))
+                .andExpect(status().isForbidden());
+        // An invited membership does not grant access yet.
+        mockMvc.perform(get("/api/v1/identity/companies/" + companyId + "/member-names")
+                        .header(HttpHeaders.AUTHORIZATION, identities.bearerToken(invitedUser)))
+                .andExpect(status().isForbidden());
+    }
+
     private ResultActions list(UUID companyId, UUID actor) throws Exception {
         return mockMvc.perform(get(membershipsUrl(companyId))
                 .header(HttpHeaders.AUTHORIZATION, identities.bearerToken(actor)));
