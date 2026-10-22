@@ -204,9 +204,9 @@ public final class FakePaymentInternalApi {
             if (companyId != null && !companyId.equals(owner)) {
                 continue;
             }
-            long[] f = figures.computeIfAbsent(owner, key -> new long[4]);
+            long[] f = figures.computeIfAbsent(owner, key -> new long[5]);
             f[0]++;
-            f["ISSUED".equals(item.get("status")) ? 1 : 2]++;
+            f[switch (String.valueOf(item.get("status"))) { case "ISSUED" -> 1; case "BOUNCED" -> 4; default -> 2; }]++;
             f[3] += ((Number) item.get("version")).longValue();
         }
         List<Map<String, Object>> companies = new ArrayList<>();
@@ -218,6 +218,7 @@ public final class FakePaymentInternalApi {
             company.put("chequeCount", f[0]);
             company.put("issuedCount", f[1]);
             company.put("cancelledCount", f[2]);
+            company.put("bouncedCount", f[4]);
             company.put("versionSum", f[3]);
             companies.add(company);
             total += f[0];

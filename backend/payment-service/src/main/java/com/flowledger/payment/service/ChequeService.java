@@ -1,6 +1,7 @@
 package com.flowledger.payment.service;
 
 import com.flowledger.payment.client.CurrentAccountClient;
+import com.flowledger.payment.dto.BounceChequeRequest;
 import com.flowledger.payment.dto.CancelChequeRequest;
 import com.flowledger.payment.dto.ChequeRequest;
 import com.flowledger.payment.dto.ChequeResponse;
@@ -51,6 +52,9 @@ public class ChequeService {
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
     private static final Set<CompanyRole> MANAGE_ROLES =
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER);
+    // The Accountant records a bounced cheque when the bank returns it, and so may the roles above.
+    private static final Set<CompanyRole> BOUNCE_ROLES =
+            EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
 
     private static final String AGGREGATE_TYPE = "Cheque";
 
@@ -135,6 +139,39 @@ public class ChequeService {
             cheque = saveCheque(cheque);
             record(cheque, PaymentAuditAction.CHEQUE_CANCELLED, "ChequeCancelled", actor,
                     request.reason().trim(), before);
+            return ChequeResponse.from(cheque);
+        });
+    }
+
+    /**
+     * Records that the bank returned an issued cheque unpaid. Like a cancelled cheque it stays on
+     * record and is no longer a forecast outflow. Unlike cancelling, it is done after the cheque was
+     * presented, so the expected clearing date may have passed.
+     */
+    public ChequeResponse bounceCheque(Jwt user, UUID companyId, UUID chequeId, BounceChequeRequest request) {
+        companyAccessVerifier.verify(user, companyId, BOUNCE_ROLES);
+        UUID actor = userId(user);
+        LocalDate today = LocalDate.now(clock);
+        if (request.bouncedOn().isAfter(today)) {
+            throw new InvalidChequeException("bouncedOn", "bouncedOn must not be after today");
+        }
+
+        return writeTransaction.execute(status -> {
+            Cheque cheque = chequeRepository.findByCompanyIdAndId(companyId, chequeId)
+                    .orElseThrow(ChequeNotFoundException::new);
+            if (cheque.getVersion() != request.version()) {
+                throw new ChequeVersionConflictException();
+            }
+            if (!cheque.canBounce()) {
+                throw new ChequeNotChangeableException("Only an issued cheque can be marked as bounced.");
+            }
+            if (request.bouncedOn().isBefore(cheque.getIssueDate())) {
+                throw new InvalidChequeException("bouncedOn", "bouncedOn must not be before the cheque's issue date");
+            }
+            Map<String, Object> before = cheque.snapshot();
+            cheque.bounce(request.bouncedOn(), actor, clock.instant());
+            cheque = saveCheque(cheque);
+            record(cheque, PaymentAuditAction.CHEQUE_BOUNCED, "ChequeBounced", actor, request.reason().trim(), before);
             return ChequeResponse.from(cheque);
         });
     }

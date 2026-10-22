@@ -56,7 +56,9 @@ export interface ApiCheque {
   id: string; bankAccountId: string; chequeNumber: string; payeeName: string; category: ApiChequeCategory
   /** What an OTHER_EXPENSES cheque was; null for every other category. */
   otherDescription: string | null; amount: number
-  issueDate: string; expectedClearingDate: string; status: "ISSUED" | "CANCELLED"; notes: string | null; version: number
+  issueDate: string; expectedClearingDate: string; status: "ISSUED" | "CANCELLED" | "BOUNCED"; notes: string | null; version: number
+  /** Set only for a BOUNCED cheque: the day the bank returned it. */
+  bouncedOn: string | null
 }
 
 export interface ChequeRequest {
@@ -240,6 +242,9 @@ export const flowledger = {
   updateCheque: (c: string, id: string, body: ChequeRequest) => api<ApiCheque>(`${payment(c)}/cheques/${id}`, { method: "PUT", json: body }),
   cancelCheque: (c: string, id: string, reason: string, version: number) =>
     api<ApiCheque>(`${payment(c)}/cheques/${id}/cancel`, { method: "POST", json: { reason, version } }),
+  /** The bank returned the cheque unpaid on bouncedOn; it stays on record and leaves the forecast. */
+  bounceCheque: (c: string, id: string, bouncedOn: string, reason: string, version: number) =>
+    api<ApiCheque>(`${payment(c)}/cheques/${id}/bounce`, { method: "POST", json: { bouncedOn, reason, version } }),
 
   forecastRuns: (c: string) => api<ForecastRunSummary[]>(`${forecast(c)}/forecast-runs`),
   forecastRun: (c: string, runId: string) => api<ForecastRun>(`${forecast(c)}/forecast-runs/${runId}`),

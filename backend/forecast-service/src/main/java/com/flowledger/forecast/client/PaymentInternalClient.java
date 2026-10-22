@@ -111,7 +111,7 @@ public class PaymentInternalClient {
         }
     }
 
-    // The summary contract: whole non-negative numbers, ISSUED + CANCELLED = cheques, every version
+    // The summary contract: whole non-negative numbers, ISSUED + CANCELLED + BOUNCED = cheques, every version
     // at least 1, one entry per company, totals adding up, and only the requested company if any.
     @SuppressWarnings("unchecked")
     static Map<UUID, CompanyChequeSummary> validatedSummary(Map<String, Object> body, UUID companyId) {
@@ -133,7 +133,9 @@ public class PaymentInternalClient {
             CompanyChequeSummary summary = new CompanyChequeSummary(id, count(company.get("chequeCount")),
                     count(company.get("issuedCount")), count(company.get("cancelledCount")),
                     count(company.get("versionSum")));
-            if (summary.issuedCount() + summary.cancelledCount() != summary.chequeCount()
+            // Absent from payment-service versions without bounced cheques, where it is always 0.
+            long bounced = company.containsKey("bouncedCount") ? count(company.get("bouncedCount")) : 0;
+            if (summary.issuedCount() + summary.cancelledCount() + bounced != summary.chequeCount()
                     || summary.versionSum() < summary.chequeCount() || summary.chequeCount() == 0) {
                 throw new ScanFailedException("Invalid cheque summary: inconsistent company figures");
             }

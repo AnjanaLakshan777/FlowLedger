@@ -23,7 +23,8 @@ public class ChequeEventParser {
 
     static final int SCHEMA_VERSION = 1;
     private static final int MAX_BODY_BYTES = 16 * 1024;
-    private static final Set<String> EVENT_TYPES = Set.of("ChequeIssued", "ChequeUpdated", "ChequeCancelled");
+    private static final Set<String> EVENT_TYPES = Set.of(
+            "ChequeIssued", "ChequeUpdated", "ChequeCancelled", "ChequeBounced");
 
     private final JsonMapper jsonMapper;
 
@@ -56,7 +57,11 @@ public class ChequeEventParser {
         if (!fields.companyId().equals(companyId)) {
             throw new InvalidChequeEventException("companyId does not match the companyId header");
         }
-        String expectedStatus = "ChequeCancelled".equals(eventType) ? "CANCELLED" : "ISSUED";
+        String expectedStatus = switch (eventType) {
+            case "ChequeCancelled" -> "CANCELLED";
+            case "ChequeBounced" -> "BOUNCED";
+            default -> "ISSUED";
+        };
         if (!expectedStatus.equals(fields.status())) {
             throw new InvalidChequeEventException("status does not match eventType");
         }

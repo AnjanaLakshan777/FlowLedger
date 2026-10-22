@@ -85,6 +85,18 @@ class PaymentInternalClientTest {
     }
 
     @Test
+    void shouldCountBouncedChequesInTheSummary() {
+        Map<String, Object> withBounced = new HashMap<>(company(LOW, 4, 2, 1, 6));
+        withBounced.put("bouncedCount", 1);
+        assertThat(PaymentInternalClient.validatedSummary(summary(4, withBounced), null)).containsOnlyKeys(LOW);
+
+        withBounced.put("bouncedCount", 2);
+        assertInvalidSummary(summary(4, withBounced), null, "inconsistent");
+        withBounced.put("bouncedCount", -1);
+        assertInvalidSummary(summary(4, withBounced), null, "whole");
+    }
+
+    @Test
     void shouldRejectSummariesThatBreakTheContract() {
         assertInvalidSummary(summary(3, company(LOW, 3, 2, 0, 3)), null, "inconsistent");
         assertInvalidSummary(summary(3, company(LOW, 3, 2, 1, 2)), null, "inconsistent");

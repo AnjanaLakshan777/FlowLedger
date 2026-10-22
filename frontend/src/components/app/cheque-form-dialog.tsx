@@ -162,3 +162,55 @@ export function CancelChequeDialog({ cheque, onClose, onCancelled }: { cheque: C
     </Dialog>
   )
 }
+
+/** The bank returned the cheque unpaid: recorded with the day and reason, and the cheque leaves the forecast. */
+export function BounceChequeDialog({ cheque, today, onClose, onBounced }: {
+  cheque: Cheque | null; today: string; onClose: () => void; onBounced?: (c: Cheque, bouncedOn: string) => void
+}) {
+  const { actions } = useAppState()
+  const [bouncedOn, setBouncedOn] = useState(today)
+  const [reason, setReason] = useState("")
+  const [errors, setErrors] = useState<{ date?: string; reason?: string; form?: string }>({})
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setBouncedOn(today); setReason(""); setErrors({}) }, [cheque, today])
+  const save = async (c: Cheque) => {
+    if (!bouncedOn || bouncedOn > today || bouncedOn < c.cheque_date) {
+      return setErrors({ date: `Choose a day from the issue date (${fmt.date(c.cheque_date)}) to today.` })
+    }
+    if (!reason.trim()) return setErrors({ reason: "Enter the reason the bank gave, for example Refer to drawer." })
+    setSaving(true)
+    const err = await actions.bounceCheque(c, bouncedOn, reason.trim())
+    setSaving(false)
+    if (err) return setErrors({ form: err })
+    onClose()
+    onBounced?.(c, bouncedOn)
+  }
+  return (
+    <Dialog open={!!cheque} onOpenChange={(o) => !o && onClose()}>
+      {cheque && (
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record cheque #{cheque.cheque_no} as bounced?</DialogTitle>
+            <DialogDescription>
+              {cheque.payee} · {fmt.lkr(cheque.amount)}. The bank returned it unpaid, so it stops counting as a payment and the forecast is
+              recalculated. It stays on record as Bounced; a replacement cheque is added as a new cheque payment.
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Bounced on" htmlFor="bounce-date" error={errors.date}>
+            <Input id="bounce-date" type="date" className="w-44" min={cheque.cheque_date} max={today} value={bouncedOn}
+              onChange={(e) => { setBouncedOn(e.target.value); setErrors({}) }} aria-invalid={!!errors.date || undefined} />
+          </Field>
+          <Field label="Reason" htmlFor="bounce-reason" error={errors.reason}>
+            <Textarea id="bounce-reason" rows={2} placeholder="e.g. Refer to drawer · Insufficient funds" value={reason}
+              onChange={(e) => { setReason(e.target.value); setErrors({}) }} aria-invalid={!!errors.reason || undefined} />
+          </Field>
+          {errors.form && <Alert variant="destructive"><AlertTriangle /><AlertDescription>{errors.form}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Keep cheque</Button>
+            <Button variant="destructive" disabled={saving} onClick={() => void save(cheque)}>{saving ? "Saving…" : "Record as bounced"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  )
+}

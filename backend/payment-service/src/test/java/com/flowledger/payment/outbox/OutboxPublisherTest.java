@@ -114,14 +114,14 @@ class OutboxPublisherTest {
 
     @Test
     void shouldNotGuessARouteForAnUnknownEventType() {
-        ClaimedEvent unknown = event("ChequeBounced", 3);
+        ClaimedEvent unknown = event("ChequeDestroyed", 3);
         when(store.claim(eq(50), eq(Duration.ofSeconds(60)), isNull())).thenReturn(List.of(unknown));
 
         publisher.publishDue();
 
         verify(rabbit, never()).send(anyString(), anyString(), any(Message.class), any(CorrelationData.class));
         // third attempt: 5s doubled twice, capped by the jitter at the top of the range
-        verify(store).scheduleRetry(unknown.id(), Duration.ofSeconds(20), "No route for event type ChequeBounced");
+        verify(store).scheduleRetry(unknown.id(), Duration.ofSeconds(20), "No route for event type ChequeDestroyed");
     }
 
     @Test

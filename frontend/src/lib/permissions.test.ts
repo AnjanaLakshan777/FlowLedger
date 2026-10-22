@@ -17,9 +17,9 @@ describe("role permissions", () => {
     expect(homePage("CASHIER")).toBe("daily-sales")
   })
 
-  it("Accountant: finance pages, enters sales and uploads imports, no Finance Controller-only actions", () => {
+  it("Accountant: finance pages, enters sales, imports history and monthly bank data, records bounced cheques", () => {
     expect(pagesFor("ACCOUNTANT")).toEqual(FINANCE)
-    for (const p of ["sales.enter", "import.upload"] as Permission[]) expect(can("ACCOUNTANT", p)).toBe(true)
+    for (const p of ["sales.enter", "import.upload", "bank.importMonthly", "cheques.bounce"] as Permission[]) expect(can("ACCOUNTANT", p)).toBe(true)
     for (const p of ["import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "users.manage", "roles.assign", "settings.manage"] as Permission[]) {
       expect(can("ACCOUNTANT", p)).toBe(false)
     }
@@ -27,7 +27,7 @@ describe("role permissions", () => {
 
   it("Finance Controller: all finance operations and financial audit, no user or role administration", () => {
     expect(pagesFor("FINANCE_CONTROLLER")).toEqual(FINANCE)
-    for (const p of ["sales.enter", "import.upload", "import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "audit.financial"] as Permission[]) {
+    for (const p of ["sales.enter", "import.upload", "import.approve", "cheques.manage", "cheques.bounce", "bank.retrySync", "bank.enterData", "bank.importMonthly", "audit.financial"] as Permission[]) {
       expect(can("FINANCE_CONTROLLER", p)).toBe(true)
     }
     for (const p of ["users.manage", "roles.assign", "settings.manage", "bank.configure", "audit.security"] as Permission[]) {

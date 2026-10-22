@@ -163,9 +163,11 @@ Confirmed by the product owner on 2026-10-15.
 
 ### Cheques
 
-- Supported cheque statuses are `ISSUED` and `CANCELLED`.
+- Supported cheque statuses are `ISSUED`, `CANCELLED`, and `BOUNCED`
+  (confirmed by the product owner, 2026-10-22: when the bank returns a
+  cheque unpaid, the Accountant records it, and it leaves the forecast).
 - Forecast outflows include issued cheques using their expected clearing dates.
-- Cancelled cheques are excluded from forecasts.
+- Cancelled and bounced cheques are excluded from forecasts.
 - Do not automatically mark overdue cheques as paid.
 - Actual outflows include cheque payments actually debited by their actual
   bank transaction date.
@@ -191,6 +193,8 @@ Confirmed by the product owner on 2026-10-15:
   it in `bank-integration-service`; clients do not send a bank account.
 - Cancelling a cheque requires a reason, recorded with the actor in the
   payment audit history.
+- Recording a bounced cheque is allowed for `ACCOUNTANT`, `FINANCE_CONTROLLER`,
+  and `COMPANY_ADMIN` (2026-10-22), and needs the day it bounced and a reason.
 
 ### Historical Sales Import
 
@@ -923,6 +927,19 @@ follow the finalized UI and must be reviewed before production.
   concurrent change, returns 409 instead of overwriting another user's change.
 - If the company has no active current account, adding a cheque returns 409.
   If `bank-integration-service` cannot answer, it returns 503.
+- Bounced cheques (`V4__add_bounced_cheques.sql`, additive: status `BOUNCED`
+  and `bounced_on`, set exactly for bounced cheques and not before the issue
+  date): `POST /{id}/bounce` with `bouncedOn`, `reason`, and `version`.
+  Allowed for any `ISSUED` cheque, also past its expected clearing date,
+  because a bounce is known only after the cheque was presented; `bouncedOn`
+  must not be after today or before the issue date (400). Any other status
+  gives 409 ("Only an issued cheque can be marked as bounced."); a stale
+  version 409. It writes a `CHEQUE_BOUNCED` audit event with the reason and a
+  `ChequeBounced` outbox event (routing key `cheque.bounced`, payload with
+  `status` `BOUNCED` and `bouncedOn`). A bounced cheque cannot be edited,
+  cancelled, or bounced again; a replacement is added as a new cheque. The
+  internal summary adds `bouncedCount` (issued + cancelled + bounced =
+  cheques).
 
 ### Audit History and Outbox
 
@@ -1227,7 +1244,8 @@ confirmed.
 ### Cheque Event Consumer (RabbitMQ)
 
 - Confirmed for this milestone: forecast-service consumes payment-service's
-  `ChequeIssued`, `ChequeUpdated`, and `ChequeCancelled` events and keeps
+  `ChequeIssued`, `ChequeUpdated`, `ChequeCancelled`, and (since 2026-10-22)
+  `ChequeBounced` events and keeps
   its own copy of the cheques in `forecast_cheques`. It never reads
   payment-service's database. Forecast calculations, saved runs, and their
   cheque snapshots are unchanged and do not read the projection yet; a run
@@ -1260,7 +1278,8 @@ confirmed.
   cheque number digits only; known category; amount a positive plain decimal
   string with at most 2 decimals that fits NUMERIC(19, 2); ISO dates with the
   clearing date not before the issue date; status `CANCELLED` for
-  `ChequeCancelled` and `ISSUED` otherwise; integer `version` of at least
+  `ChequeCancelled`, `BOUNCED` for `ChequeBounced` (projection migration V7)
+  and `ISSUED` otherwise; integer `version` of at least
   1; body at most 16 KB. Unknown extra fields are ignored and never stored.
 - One transaction per event: insert the event ID into `processed_events`
   (`ON CONFLICT DO NOTHING`; already there means a duplicate and nothing
@@ -1589,6 +1608,11 @@ retry; the frontend never falls back to demonstration data.
   Scheduled cheque past its expected clearing date is labelled "Past
   clearing date" and is never assumed paid. A cleared cheque cannot be
   edited or cancelled. Cancelling requires a reason.
+- Cheque Payments has a "Bounced" action on every Scheduled cheque for
+  Accountants, Finance Controllers, and Company Admins: a dialog asks for the
+  day it bounced (issue date to today) and the bank's reason. Bounced
+  cheques show "Returned unpaid <date>", have their own filter, and are not
+  forecast.
 - Bank Account (statement import mode): monthly template upload with a
   month picker (ended months only, imported months marked), template
   download, column guide, row errors, and the import history (template and
@@ -1784,11 +1808,10 @@ The following must be researched or agreed before implementation:
   an administrator), and how platform-level settings are managed.
 - Self-service tenant onboarding, if any, instead of companies being created
   by a `SYSTEM_ADMIN`.
-- The UI shows cheque states `Scheduled`, `Assumed paid`, `Cancelled`, and
-  `Bounced`. The confirmed lifecycle has only `ISSUED` and `CANCELLED`:
-  `Bounced` is not implemented, and "Assumed paid" is a display label for an
-  `ISSUED` cheque past its clearing date. How overdue cheques are treated in
-  the forecast, and whether bounced cheques are recorded, is still open.
+- How overdue `ISSUED` cheques (past their clearing date, not cleared in the
+  imported bank data, not bounced) are treated in the forecast is still open.
+  Bounced cheques are recorded since 2026-10-22, but nothing yet links a
+  bank's returned-cheque credit to the bounce.
 - How cheques that need correction after their expected clearing date are
   handled; the UI and the API allow no change once that date has passed.
 - Audit events for company creation and membership changes in

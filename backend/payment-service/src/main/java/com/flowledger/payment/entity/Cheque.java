@@ -71,6 +71,10 @@ public class Cheque {
     @Column(name = "notes", columnDefinition = "text")
     private String notes;
 
+    // The day the bank returned the cheque unpaid; set only for a BOUNCED cheque.
+    @Column(name = "bounced_on")
+    private LocalDate bouncedOn;
+
     @Column(name = "created_by", nullable = false, updatable = false)
     private UUID createdBy;
 
@@ -119,6 +123,18 @@ public class Cheque {
         markUpdated(actor, now);
     }
 
+    // A bounce is recorded after the bank returns the cheque, so it is not limited to cheques
+    // still waiting to clear; only an issued cheque can bounce.
+    public boolean canBounce() {
+        return status == ChequeStatus.ISSUED;
+    }
+
+    public void bounce(LocalDate on, UUID actor, Instant now) {
+        this.status = ChequeStatus.BOUNCED;
+        this.bouncedOn = on;
+        markUpdated(actor, now);
+    }
+
     // The business state recorded in audit history and outbox events. No personal or secret data.
     public Map<String, Object> snapshot() {
         Map<String, Object> snapshot = new LinkedHashMap<>();
@@ -133,6 +149,10 @@ public class Cheque {
         snapshot.put("notes", notes);
         snapshot.put("bankAccountId", bankAccountId.toString());
         snapshot.put("version", version);
+        // Only bounced cheques carry it, so earlier snapshots and events are unchanged.
+        if (bouncedOn != null) {
+            snapshot.put("bouncedOn", bouncedOn.toString());
+        }
         return snapshot;
     }
 

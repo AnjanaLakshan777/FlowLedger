@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAppState } from "@/components/app/app-state"
-import { CancelChequeDialog, ChequeFormDialog } from "@/components/app/cheque-form-dialog"
+import { BounceChequeDialog, CancelChequeDialog, ChequeFormDialog } from "@/components/app/cheque-form-dialog"
 import { CellStack, DataTable } from "@/components/app/data-table"
 import { DataState, useNotReady } from "@/components/app/data-state"
 import { StatRow } from "@/components/app/kpi-card"
@@ -22,7 +22,8 @@ import { fmt, sum } from "@/lib/format"
 /**
  * A cheque is a future payment, forecast on its expected clearing date. It shows as Cleared once the month's imported
  * bank transactions include a cheque payment with its number; past its clearing date without one it stays Scheduled
- * and is shown as "Past clearing date". Bounced exists only in the demonstration data.
+ * and is shown as "Past clearing date". A cheque the bank returned unpaid is recorded as Bounced (Accountants and above) and
+ * leaves the forecast.
  */
 type Show = "upcoming" | "past" | "cleared" | "Cancelled" | "Bounced" | "all"
 const SHOW: [Show, string][] = [
@@ -37,12 +38,14 @@ export default function ChequesPage() {
   const [addOpen, setAddOpen] = useState(false)
   const [editing, setEditing] = useState<Cheque | null>(null)
   const [cancelling, setCancelling] = useState<Cheque | null>(null)
+  const [bouncing, setBouncing] = useState<Cheque | null>(null)
   const [show, setShow] = useState<Show>("upcoming")
   const [cat, setCat] = useState("all")
   const [q, setQ] = useState("")
   const [from, setFrom] = useState("")
   const [to, setTo] = useState("")
   const canEdit = allow("cheques.manage")
+  const canBounce = allow("cheques.bounce")
 
   useEffect(() => {
     if (params.get("new") === "1" && canEdit) { setAddOpen(true); setParams({}, { replace: true }) }
@@ -88,13 +91,16 @@ export default function ChequesPage() {
       <Card>
         <CardHeader>
           <CardTitle>Cheques</CardTitle>
-          <CardDescription>Upcoming payments are deducted in the forecast on their expected clearing date. Cancelled cheques are not counted.</CardDescription>
+          <CardDescription>
+            Upcoming payments are deducted in the forecast on their expected clearing date. Cancelled and bounced cheques are not counted.
+            {canBounce && " When the bank returns a cheque unpaid, choose Bounced."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-2">
           <SearchInput value={q} onChange={setQ} placeholder="Search payee, cheque no. or note" />
           <Select value={show} onValueChange={(v) => setShow(v as Show)}>
             <SelectTrigger aria-label="Show" className="w-52"><SelectValue /></SelectTrigger>
-            <SelectContent>{SHOW.filter(([v]) => mode === "demo" || v !== "Bounced").map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+            <SelectContent>{SHOW.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
           </Select>
           <Select value={cat} onValueChange={setCat}>
             <SelectTrigger aria-label="Category" className="w-44"><SelectValue /></SelectTrigger>
@@ -126,19 +132,27 @@ export default function ChequesPage() {
             {
               key: "status", header: "Payment", sortValue: (r) => paymentState(r, today, cleared), cell: (r) => {
                 const clearing = clearingOf(r, cleared)
-                const sub = clearing
-                  ? `Cleared ${fmt.short(clearing.date)}${clearing.amount !== r.amount ? ` · bank paid ${fmt.amt(clearing.amount)}` : ""}`
-                  : isUpcoming(r, today) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : isPastClearingDate(r, today) ? "Not in the bank data yet" : undefined
+                const sub = r.status === "Bounced"
+                  ? (r.bounced_on ? `Returned unpaid ${fmt.short(r.bounced_on)}` : "Returned unpaid")
+                  : clearing
+                    ? `Cleared ${fmt.short(clearing.date)}${clearing.amount !== r.amount ? ` · bank paid ${fmt.amt(clearing.amount)}` : ""}`
+                    : isUpcoming(r, today) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : isPastClearingDate(r, today) ? "Not in the bank data yet" : undefined
                 return <CellStack main={<StatusBadge status={paymentState(r, today, cleared)} />} sub={sub} />
               },
             },
             {
-              key: "act", header: "", cell: (r) => (canEdit && isUpcoming(r, today) && !clearingOf(r, cleared) ? (
-                <div className="flex gap-1.5">
-                  <Button variant="outline" size="sm" onClick={() => setEditing(r)}>Edit</Button>
-                  <Button variant="outline" size="sm" onClick={() => setCancelling(r)}>Cancel</Button>
-                </div>
-              ) : null),
+              key: "act", header: "", cell: (r) => {
+                const editable = canEdit && isUpcoming(r, today) && !clearingOf(r, cleared)
+                const bounceable = canBounce && r.status === "Scheduled" && !!r.id
+                if (!editable && !bounceable) return null
+                return (
+                  <div className="flex gap-1.5">
+                    {editable && <Button variant="outline" size="sm" onClick={() => setEditing(r)}>Edit</Button>}
+                    {editable && <Button variant="outline" size="sm" onClick={() => setCancelling(r)}>Cancel</Button>}
+                    {bounceable && <Button variant="outline" size="sm" onClick={() => setBouncing(r)}>Bounced</Button>}
+                  </div>
+                )
+              },
             },
           ]}
         />
@@ -149,6 +163,8 @@ export default function ChequesPage() {
       <ChequeFormDialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)} cheque={editing} defaultDate={today}
         onSaved={(c) => toast.success(`Cheque ${c.cheque_no} updated`, { description: `Forecast on ${fmt.day(c.expected_clear_date)}` })} />
       <CancelChequeDialog cheque={cancelling} onClose={() => setCancelling(null)} onCancelled={(c) => toast(`Cheque ${c.cheque_no} cancelled`, { description: "Removed from the forecast" })} />
+      <BounceChequeDialog cheque={bouncing} today={today} onClose={() => setBouncing(null)}
+        onBounced={(c, on) => toast(`Cheque ${c.cheque_no} recorded as bounced`, { description: `Returned unpaid ${fmt.date(on)} · removed from the forecast` })} />
     </>
   )
 }

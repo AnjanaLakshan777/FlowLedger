@@ -278,21 +278,22 @@ class InternalChequeApiIntegrationTest {
         insert(first, UUID.randomUUID(), "ISSUED", "2026-10-20", 1);
         insert(first, UUID.randomUUID(), "ISSUED", "2099-01-01", 4);
         insert(first, UUID.randomUUID(), "CANCELLED", "2001-01-01", 2);
+        insert(first, UUID.randomUUID(), "BOUNCED", "2001-01-15", 3);
         insert(second, UUID.randomUUID(), "CANCELLED", "2026-10-20", 5);
 
         ChequeSummaryResponse all = summary(null);
         assertThat(all.companies()).contains(
-                new ChequeSummaryResponse.Company(first, 3, 2, 1, 7),
-                new ChequeSummaryResponse.Company(second, 1, 0, 1, 5));
+                new ChequeSummaryResponse.Company(first, 4, 2, 1, 1, 10),
+                new ChequeSummaryResponse.Company(second, 1, 0, 1, 0, 5));
         assertThat(all.companies()).extracting(ChequeSummaryResponse.Company::companyId)
                 .isSortedAccordingTo(DATABASE_ORDER).doesNotHaveDuplicates();
         assertThat(all.chequeCount())
                 .isEqualTo(all.companies().stream().mapToLong(ChequeSummaryResponse.Company::chequeCount).sum());
-        assertThat(all.chequeCount()).isGreaterThanOrEqualTo(4);
+        assertThat(all.chequeCount()).isGreaterThanOrEqualTo(5);
 
         ChequeSummaryResponse one = summary(first);
-        assertThat(one.companies()).containsExactly(new ChequeSummaryResponse.Company(first, 3, 2, 1, 7));
-        assertThat(one.chequeCount()).isEqualTo(3);
+        assertThat(one.companies()).containsExactly(new ChequeSummaryResponse.Company(first, 4, 2, 1, 1, 10));
+        assertThat(one.chequeCount()).isEqualTo(4);
     }
 
     @Test
@@ -335,12 +336,12 @@ class InternalChequeApiIntegrationTest {
         jdbcTemplate.update("""
                         INSERT INTO cheques (id, company_id, bank_account_id, cheque_number, payee_name, category,
                                              amount, issue_date, expected_clearing_date, status, notes, created_by,
-                                             version)
+                                             version, bounced_on)
                         VALUES (?, ?, '5b0f4d3c-1a2b-4c5d-8e9f-0a1b2c3d4e5f', ?, 'Secret Payee Holdings',
                                 'SUPPLIER_PAYMENT', 1500.00, DATE '2001-01-01', ?::date, ?,
-                                'private settlement note', ?, ?)
+                                'private settlement note', ?, ?, CASE WHEN ? = 'BOUNCED' THEN DATE '2001-02-01' END)
                         """,
-                chequeId, companyId, nextNumber(), clearingDate, status, UUID.randomUUID(), version);
+                chequeId, companyId, nextNumber(), clearingDate, status, UUID.randomUUID(), version, status);
         return chequeId;
     }
 

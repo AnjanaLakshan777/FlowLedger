@@ -24,7 +24,7 @@ class ChequeEventParserTest {
     private final ChequeEventParser parser = new ChequeEventParser(JsonMapper.builder().build());
 
     @ParameterizedTest
-    @ValueSource(strings = {"ChequeIssued", "ChequeUpdated", "ChequeCancelled"})
+    @ValueSource(strings = {"ChequeIssued", "ChequeUpdated", "ChequeCancelled", "ChequeBounced"})
     void shouldParseEachSupportedEventType(String eventType) {
         ChequeMessages message = ChequeMessages.event(eventType, COMPANY_ID, CHEQUE_ID, 3);
 
@@ -39,7 +39,11 @@ class ChequeEventParserTest {
         assertThat(event.amount()).isEqualByComparingTo(new BigDecimal("1500.00"));
         assertThat(event.issueDate()).isEqualTo(LocalDate.of(2026, 10, 15));
         assertThat(event.expectedClearingDate()).isEqualTo(LocalDate.of(2026, 10, 22));
-        assertThat(event.status()).isEqualTo(eventType.equals("ChequeCancelled") ? "CANCELLED" : "ISSUED");
+        assertThat(event.status()).isEqualTo(switch (eventType) {
+            case "ChequeCancelled" -> "CANCELLED";
+            case "ChequeBounced" -> "BOUNCED";
+            default -> "ISSUED";
+        });
         assertThat(event.version()).isEqualTo(3);
         assertThat(event.sourceEventCreatedAt()).isEqualTo(ChequeMessages.CREATED_AT.toInstant());
     }

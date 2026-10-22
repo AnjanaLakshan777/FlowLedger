@@ -25,9 +25,9 @@ export interface DailySale {
 }
 export type ChequeCategory = "Supplier Payment" | "Salary" | "Tax" | "Other Expenses"
 /**
- * A cheque is a scheduled payment, forecast on its expected clearing date. It is never marked paid automatically:
- * a Scheduled cheque past that date stays Scheduled until bank reconciliation exists. Cancelled is the only status a user sets.
- * Bounced exists only in the demonstration data (no backend status): never forecast.
+ * A cheque is a scheduled payment, forecast on its expected clearing date. It is never marked paid automatically.
+ * A user sets Cancelled (a Finance Controller or Company Admin) or Bounced (the bank returned it unpaid; Accountants
+ * too); neither is forecast.
  */
 export type ChequeStatus = "Scheduled" | "Cancelled" | "Bounced"
 export interface Cheque {
@@ -39,6 +39,8 @@ export interface Cheque {
   /** The forecast deducts the amount on this date (never on the cheque date). */
   expected_clear_date: string
   status: ChequeStatus; notes: string
+  /** The day the bank returned a Bounced cheque unpaid (live data). */
+  bounced_on?: string | null
 }
 /** Predicted sales by sales date (from the forecasting service). */
 export interface PredictedSale { date: string; cash_sales: number; card_sales: number }

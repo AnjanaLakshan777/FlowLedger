@@ -48,7 +48,11 @@ final class ChequeMessages {
         payload.put("amount", "1500.00");
         payload.put("issueDate", "2026-10-15");
         payload.put("expectedClearingDate", "2026-10-22");
-        payload.put("status", "ChequeCancelled".equals(eventType) ? "CANCELLED" : "ISSUED");
+        payload.put("status", switch (eventType) {
+            case "ChequeCancelled" -> "CANCELLED";
+            case "ChequeBounced" -> "BOUNCED";
+            default -> "ISSUED";
+        });
         payload.put("version", version);
     }
 
@@ -83,6 +87,7 @@ final class ChequeMessages {
         return switch (String.valueOf(headers.get("eventType"))) {
             case "ChequeIssued" -> "cheque.issued";
             case "ChequeCancelled" -> "cheque.cancelled";
+            case "ChequeBounced" -> "cheque.bounced";
             default -> "cheque.updated";
         };
     }

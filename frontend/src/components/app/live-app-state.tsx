@@ -206,6 +206,7 @@ function useLiveStateValue(): AppState {
       updateCheque: (original, c) =>
         run(() => flowledger.updateCheque(cid!, original.id!, toChequeRequest({ ...c, id: original.id, version: original.version })), chequesChanged),
       cancelCheque: (c, reason) => run(() => flowledger.cancelCheque(cid!, c.id!, reason, c.version!), chequesChanged),
+      bounceCheque: (c, bouncedOn, reason) => run(() => flowledger.bounceCheque(cid!, c.id!, bouncedOn, reason, c.version!), chequesChanged),
       refreshForecast: () => run(() => flowledger.createForecast(cid!), () => { setOutdated(false); setAutoUpdate(AUTO_IDLE); reload("forecast") }),
       autoUpdateForecast: async () => {
         if (!cid || !canPage("forecast") || autoBusy.current) return

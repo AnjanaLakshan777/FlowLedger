@@ -18,6 +18,7 @@ public record ChequeSummaryResponse(long chequeCount, List<Company> companies) {
      *                   these, each at a version no higher than here, is complete and current
      *                   exactly when its count and version sum both match.
      */
-    public record Company(UUID companyId, long chequeCount, long issuedCount, long cancelledCount, long versionSum) {
+    public record Company(UUID companyId, long chequeCount, long issuedCount, long cancelledCount, long bouncedCount,
+                          long versionSum) {
     }
 }

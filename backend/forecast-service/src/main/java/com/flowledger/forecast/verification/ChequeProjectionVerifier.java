@@ -50,7 +50,7 @@ public class ChequeProjectionVerifier {
         PROJECTION_BEHIND(Status.RETRY_REQUIRED),
         /** More cheques or higher versions than payment-service: impossible unless an assumption broke. */
         PROJECTION_AHEAD(Status.NOT_VERIFIED),
-        /** Same cheques and versions but different ISSUED/CANCELLED split: an assumption broke. */
+        /** Same cheques and versions but a different ISSUED/CANCELLED split (and so BOUNCED): an assumption broke. */
         STATUS_COUNTS_DIFFER(Status.NOT_VERIFIED);
 
         private final Status status;

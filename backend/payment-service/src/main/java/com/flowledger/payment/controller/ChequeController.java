@@ -1,5 +1,6 @@
 package com.flowledger.payment.controller;
 
+import com.flowledger.payment.dto.BounceChequeRequest;
 import com.flowledger.payment.dto.CancelChequeRequest;
 import com.flowledger.payment.dto.ChequeRequest;
 import com.flowledger.payment.dto.ChequeResponse;
@@ -71,5 +72,14 @@ public class ChequeController {
                                        @PathVariable UUID chequeId,
                                        @Valid @RequestBody CancelChequeRequest request) {
         return chequeService.cancelCheque(user, companyId, chequeId, request);
+    }
+
+    // The bank returned the cheque unpaid; it stays on record and leaves the forecast.
+    @PostMapping("/{chequeId}/bounce")
+    public ChequeResponse bounceCheque(@AuthenticationPrincipal Jwt user,
+                                       @PathVariable UUID companyId,
+                                       @PathVariable UUID chequeId,
+                                       @Valid @RequestBody BounceChequeRequest request) {
+        return chequeService.bounceCheque(user, companyId, chequeId, request);
     }
 }

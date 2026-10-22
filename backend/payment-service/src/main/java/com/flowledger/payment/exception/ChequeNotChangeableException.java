@@ -7,9 +7,10 @@ import org.springframework.web.ErrorResponseException;
 public class ChequeNotChangeableException extends ErrorResponseException {
 
     public ChequeNotChangeableException() {
-        super(HttpStatus.CONFLICT,
-                ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
-                        "Only issued cheques whose expected clearing date is after today can be changed or cancelled."),
-                null);
+        this("Only issued cheques whose expected clearing date is after today can be changed or cancelled.");
+    }
+
+    public ChequeNotChangeableException(String detail) {
+        super(HttpStatus.CONFLICT, ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, detail), null);
     }
 }

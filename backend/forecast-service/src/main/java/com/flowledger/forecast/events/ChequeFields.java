@@ -27,7 +27,8 @@ public record ChequeFields(
 ) {
 
     private static final Set<String> CATEGORIES = Set.of("SUPPLIER_PAYMENT", "SALARY", "TAX", "OTHER_EXPENSES");
-    private static final Set<String> STATUSES = Set.of("ISSUED", "CANCELLED");
+    // BOUNCED: returned unpaid by the bank; like CANCELLED it is never a forecast outflow.
+    private static final Set<String> STATUSES = Set.of("ISSUED", "CANCELLED", "BOUNCED");
     private static final Pattern CHEQUE_NUMBER = Pattern.compile("[0-9]{1,40}");
     // Plain decimal as payment-service writes it, fitting NUMERIC(19, 2); no exponent or sign.
     private static final Pattern AMOUNT = Pattern.compile("[0-9]{1,17}(\\.[0-9]{1,2})?");

@@ -21,6 +21,8 @@ public record ChequeResponse(
         LocalDate issueDate,
         LocalDate expectedClearingDate,
         ChequeStatus status,
+        // Set only for a BOUNCED cheque: the day the bank returned it.
+        LocalDate bouncedOn,
         String notes,
         UUID createdBy,
         Instant createdAt,
@@ -42,6 +44,7 @@ public record ChequeResponse(
                 cheque.getIssueDate(),
                 cheque.getExpectedClearingDate(),
                 cheque.getStatus(),
+                cheque.getBouncedOn(),
                 cheque.getNotes(),
                 cheque.getCreatedBy(),
                 cheque.getCreatedAt(),

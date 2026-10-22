@@ -465,6 +465,74 @@ class ChequeControllerIntegrationTest {
         assertThat(auditEvents(chequeId)).hasSize(2);
     }
 
+    // Bounced cheques
+
+    @Test
+    void shouldRecordABouncedChequePastItsClearingDate() throws Exception {
+        // Bounces are found after the cheque was presented, so the expected clearing date has usually passed.
+        UUID chequeId = insertCheque(companyId, "006000", "ISSUED", today.minusDays(3));
+
+        bounce(chequeId, today.minusDays(1).toString(), "  Refer to drawer  ", 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("BOUNCED"))
+                .andExpect(jsonPath("$.bouncedOn").value(today.minusDays(1).toString()))
+                .andExpect(jsonPath("$.updatedBy").value(userId.toString()))
+                .andExpect(jsonPath("$.version").value(2));
+
+        Map<String, Object> bounced = auditEvents(chequeId).getLast();
+        assertThat(bounced.get("action")).isEqualTo("CHEQUE_BOUNCED");
+        assertThat(bounced.get("reason")).isEqualTo("Refer to drawer");
+        assertThat(bounced.get("before_status")).isEqualTo("ISSUED");
+        assertThat(bounced.get("after_status")).isEqualTo("BOUNCED");
+        Map<String, Object> event = outboxEvents(chequeId).getLast();
+        assertThat(event.get("event_type")).isEqualTo("ChequeBounced");
+        assertThat((String) event.get("payload")).contains("\"status\": \"BOUNCED\"")
+                .contains("\"bouncedOn\": \"" + today.minusDays(1) + "\"").doesNotContain("Supplier");
+
+        // Bounced cheques stay on record but are no longer issued payments.
+        assertChequeNumbers("?status=ISSUED");
+        assertChequeNumbers("?status=BOUNCED", "006000");
+    }
+
+    @Test
+    void shouldLetAccountantsRecordABounce() throws Exception {
+        UUID chequeId = createCheque("006100");
+        identityService.reset();
+        identityService.grant(companyId, "ACCOUNTANT");
+
+        bounce(chequeId, today.toString(), "Insufficient funds", 1).andExpect(status().isOk());
+        // Accountants still cannot add or cancel cheques.
+        add(requestJson(Map.of("chequeNumber", "006101"))).andExpect(status().isForbidden());
+
+        identityService.reset();
+        identityService.grant(companyId, "CASHIER");
+        bounce(chequeId, today.toString(), "Insufficient funds", 2).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shouldRefuseBouncesThatCannotHaveHappened() throws Exception {
+        UUID chequeId = insertCheque(companyId, "006200", "ISSUED", today.minusDays(3));
+        UUID cancelled = insertCheque(companyId, "006201", "CANCELLED", today.plusDays(3));
+
+        bounce(chequeId, today.plusDays(1).toString(), "Refer to drawer", 1)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.bouncedOn").value("bouncedOn must not be after today"));
+        // insertCheque issues the cheque 30 days before its clearing date.
+        bounce(chequeId, today.minusDays(40).toString(), "Refer to drawer", 1)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.bouncedOn").value("bouncedOn must not be before the cheque's issue date"));
+        bounce(chequeId, today.toString(), "  ", 1).andExpect(status().isBadRequest());
+        bounce(chequeId, today.toString(), "Refer to drawer", 2).andExpect(status().isConflict());
+        bounce(cancelled, today.toString(), "Refer to drawer", 1)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Only an issued cheque can be marked as bounced."));
+
+        bounce(chequeId, today.toString(), "Refer to drawer", 1).andExpect(status().isOk());
+        bounce(chequeId, today.toString(), "Refer to drawer", 2).andExpect(status().isConflict());
+        cancel(chequeId, "Wrong payee", 2).andExpect(status().isConflict());
+        assertThat(auditEvents(chequeId)).extracting(row -> row.get("action")).containsExactly("CHEQUE_BOUNCED");
+    }
+
     @Test
     void shouldRejectInvalidUuidPathParameters() throws Exception {
         mockMvc.perform(authenticated(get("/api/v1/payment/companies/not-a-uuid/cheques")))
@@ -505,6 +573,12 @@ class ChequeControllerIntegrationTest {
         return mockMvc.perform(authenticated(post(chequesUrl(companyId) + "/" + chequeId + "/cancel"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(JSON.writeValueAsString(Map.of("reason", reason, "version", version))));
+    }
+
+    private ResultActions bounce(UUID chequeId, String bouncedOn, String reason, int version) throws Exception {
+        return mockMvc.perform(authenticated(post(chequesUrl(companyId) + "/" + chequeId + "/bounce"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(Map.of("bouncedOn", bouncedOn, "reason", reason, "version", version))));
     }
 
     private MockHttpServletRequestBuilder authenticated(MockHttpServletRequestBuilder request) {

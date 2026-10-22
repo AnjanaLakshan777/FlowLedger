@@ -48,7 +48,7 @@ describe("forecast runs", () => {
     const days = dates("2026-10-01", 84).map((d) => day(d, d === "2026-10-20" ? { expectedChequeOutflows: 20000, expectedChequeCount: 1, closingBalance: -19900, cashShortage: true } : {}))
     const r = { ...run({}, days), cheques: [{ chequeId: "c1", chequeNumber: "100001", amount: 20000, expectedClearingDate: "2026-10-20" }] }
     const cheques = [toCheque({ id: "c1", bankAccountId: "acc", chequeNumber: "100001", payeeName: "E2E Supplier", category: "SUPPLIER_PAYMENT", otherDescription: null, amount: 20000,
-      issueDate: "2026-10-15", expectedClearingDate: "2026-10-20", status: "ISSUED", notes: null, version: 1 })]
+      issueDate: "2026-10-15", expectedClearingDate: "2026-10-20", status: "ISSUED", notes: null, version: 1, bouncedOn: null })]
     const f = forecastFromRun(r, cheques)
     const d20 = f.days.find((d) => d.date === "2026-10-20")!
     expect(d20.payments).toEqual([{ cheque_no: "100001", payee: "E2E Supplier", category: "Supplier Payment", amount: 20000, date: "2026-10-20" }])
@@ -65,13 +65,14 @@ describe("records", () => {
   })
 
   it("maps cheque statuses without a paid status", () => {
-    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", category: "TAX" as const, otherDescription: null, amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", notes: null, version: 2 }
+    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", category: "TAX" as const, otherDescription: null, amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", notes: null, version: 2, bouncedOn: null }
     expect(toCheque({ ...base, status: "ISSUED" })).toMatchObject({ status: "Scheduled", cheque_no: "000123", category: "Tax", version: 2 })
     expect(toCheque({ ...base, status: "CANCELLED" }).status).toBe("Cancelled")
+    expect(toCheque({ ...base, status: "BOUNCED", bouncedOn: "2026-10-05" })).toMatchObject({ status: "Bounced", bounced_on: "2026-10-05" })
   })
 
   it("sends an Other Expenses description and drops it for other categories", () => {
-    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", status: "ISSUED" as const, notes: null, version: 2 }
+    const base = { id: "c", bankAccountId: "a", chequeNumber: "000123", payeeName: "P", amount: 1, issueDate: "2026-10-01", expectedClearingDate: "2026-10-02", status: "ISSUED" as const, notes: null, version: 2, bouncedOn: null }
     const other = toCheque({ ...base, category: "OTHER_EXPENSES", otherDescription: "Audit fee" })
     expect(other).toMatchObject({ category: "Other Expenses", other_description: "Audit fee" })
     expect(toChequeRequest(other).otherDescription).toBe("Audit fee")

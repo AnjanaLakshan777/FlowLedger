@@ -41,6 +41,8 @@ export interface AppActions {
   addCheque: (c: Cheque) => Promise<string | null>
   updateCheque: (original: Cheque, c: Cheque) => Promise<string | null>
   cancelCheque: (c: Cheque, reason: string) => Promise<string | null>
+  /** The bank returned the cheque unpaid on `bouncedOn`; it leaves the forecast. */
+  bounceCheque: (c: Cheque, bouncedOn: string, reason: string) => Promise<string | null>
   /** Asks the forecast service for a forecast from the current data. */
   refreshForecast: () => Promise<string | null>
   /**
@@ -178,6 +180,11 @@ function useDemoStateValue(initialUserId: string | null): AppState {
       cancelCheque: async (c) => {
         if (!can(role, "cheques.manage")) return denied
         setCheques((rows) => rows.map((x) => (x.cheque_no === c.cheque_no ? { ...x, status: "Cancelled" } : x)))
+        return null
+      },
+      bounceCheque: async (c, bouncedOn) => {
+        if (!can(role, "cheques.bounce")) return denied
+        setCheques((rows) => rows.map((x) => (x.cheque_no === c.cheque_no ? { ...x, status: "Bounced", bounced_on: bouncedOn } : x)))
         return null
       },
       refreshForecast: async () => null,

@@ -209,6 +209,22 @@ class ChequeEventConsumerIntegrationTest {
     }
 
     @Test
+    void shouldProjectABouncedChequeSoItLeavesTheForecast() {
+        UUID companyId = company();
+        UUID chequeId = UUID.randomUUID();
+        publishAndAwait(event("ChequeIssued", companyId, chequeId, 1));
+
+        ChequeMessages bounced = event("ChequeBounced", companyId, chequeId, 2).field("bouncedOn", "2026-10-23");
+        publishAndAwait(bounced);
+
+        Map<String, Object> row = projection(chequeId);
+        assertThat(row.get("status")).isEqualTo("BOUNCED");
+        assertThat(row.get("source_version")).isEqualTo(2);
+        assertThat(outcome(bounced)).isEqualTo("APPLIED");
+        assertThat(deadLetters()).isEmpty();
+    }
+
+    @Test
     void shouldApplyARedeliveredMessageIdOnceAndAcknowledgeIt() {
         UUID companyId = company();
         UUID chequeId = UUID.randomUUID();

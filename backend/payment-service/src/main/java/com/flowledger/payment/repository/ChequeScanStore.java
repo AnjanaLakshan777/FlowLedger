@@ -42,6 +42,7 @@ public class ChequeScanStore {
                     rs.getLong("cheque_count"),
                     rs.getLong("issued_count"),
                     rs.getLong("cancelled_count"),
+                    rs.getLong("bounced_count"),
                     rs.getLong("version_sum"));
 
     private final JdbcTemplate jdbcTemplate;
@@ -61,6 +62,7 @@ public class ChequeScanStore {
                        count(*) AS cheque_count,
                        count(*) FILTER (WHERE status = 'ISSUED') AS issued_count,
                        count(*) FILTER (WHERE status = 'CANCELLED') AS cancelled_count,
+                       count(*) FILTER (WHERE status = 'BOUNCED') AS bounced_count,
                        coalesce(sum(version), 0) AS version_sum
                 FROM cheques
                 %s

@@ -9,7 +9,8 @@ public final class OutboxRoutes {
     private static final Map<String, String> ROUTING_KEYS = Map.of(
             "ChequeIssued", "cheque.issued",
             "ChequeUpdated", "cheque.updated",
-            "ChequeCancelled", "cheque.cancelled");
+            "ChequeCancelled", "cheque.cancelled",
+            "ChequeBounced", "cheque.bounced");
 
     private OutboxRoutes() {
     }
