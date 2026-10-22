@@ -22,6 +22,8 @@ export interface BankTransaction {
 }
 export interface DailySale {
   sales_date: string; cash_sales: number; card_sales: number; total: number; entered_at: string; entered_by: string; entry_type: "Standard" | "Backdated" | "Imported"; note: string
+  /** Live data: the record's ID and version, and when it was last corrected (null if never). */
+  id?: string; version?: number; corrected_at?: string | null
 }
 export type ChequeCategory = "Supplier Payment" | "Salary" | "Tax" | "Other Expenses"
 /**

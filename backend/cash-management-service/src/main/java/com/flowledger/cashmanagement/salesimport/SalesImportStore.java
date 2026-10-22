@@ -33,7 +33,7 @@ public class SalesImportStore {
             id, original_filename, status, file_error, period_start, period_end, row_count, valid_row_count,
             invalid_row_count, duplicate_row_count, cash_sales_total, card_sales_total, uploaded_by, uploaded_at,
             approved_by, approved_at, approval_note, imported_row_count, excluded_row_count, rejected_by,
-            rejected_at, rejection_reason, version
+            rejected_at, rejection_reason, reversed_by, reversed_at, reversal_reason, version
             """;
 
     private static final RowMapper<SalesImportBatchResponse> BATCH = (rs, rowNum) -> new SalesImportBatchResponse(
@@ -59,6 +59,9 @@ public class SalesImportStore {
             rs.getObject("rejected_by", UUID.class),
             instant(rs.getTimestamp("rejected_at")),
             rs.getString("rejection_reason"),
+            rs.getObject("reversed_by", UUID.class),
+            instant(rs.getTimestamp("reversed_at")),
+            rs.getString("reversal_reason"),
             rs.getInt("version"));
 
     private static final TypeReference<List<Map<String, String>>> ERRORS = new TypeReference<>() {
@@ -267,6 +270,22 @@ public class SalesImportStore {
                     version = version + 1
                 WHERE id = ? AND status = 'PENDING_APPROVAL' AND version = ?
                 """, rejectedBy, reason, batchId, version) == 1;
+    }
+
+    // Deletes the daily sales an approved import recorded; returns how many there were.
+    public int deleteImportedSales(UUID batchId) {
+        return jdbcTemplate.update("""
+                DELETE FROM daily_sales WHERE import_batch_id = ? AND entry_source = 'HISTORICAL_IMPORT'
+                """, batchId);
+    }
+
+    public boolean markReversed(UUID batchId, int version, UUID reversedBy, String reason) {
+        return jdbcTemplate.update("""
+                UPDATE sales_import_batches SET
+                    status = 'REVERSED', reversed_by = ?, reversed_at = now(), reversal_reason = ?,
+                    version = version + 1
+                WHERE id = ? AND status = 'APPROVED' AND version = ?
+                """, reversedBy, reason, batchId, version) == 1;
     }
 
     private static Instant instant(Timestamp timestamp) {

@@ -87,13 +87,13 @@ describe("records", () => {
 
   it("shows sales entry times in Colombo and marks late entries as backdated", () => {
     const s = toDailySale({ id: "s", companyId: "c", saleDate: "2026-10-10", cashSalesAmount: 1, cardSalesAmount: 2, totalSalesAmount: 3, entrySource: "MANUAL",
-      recordedBy: "u1", recordedAt: "2026-10-14T04:00:00Z" }, "u1")
+      recordedBy: "u1", recordedAt: "2026-10-14T04:00:00Z", updatedBy: null, updatedAt: null, version: 1 }, "u1")
     expect(s).toMatchObject({ entered_at: "2026-10-14T09:30", entered_by: "You", entry_type: "Backdated" })
   })
 
   it("marks sales from an approved historical import as imported, not backdated", () => {
     const s = toDailySale({ id: "s", companyId: "c", saleDate: "2025-01-01", cashSalesAmount: 1, cardSalesAmount: 2, totalSalesAmount: 3,
-      entrySource: "HISTORICAL_IMPORT", recordedBy: "u2", recordedAt: "2026-10-14T04:00:00Z" }, "u1")
+      entrySource: "HISTORICAL_IMPORT", recordedBy: "u2", recordedAt: "2026-10-14T04:00:00Z", updatedBy: null, updatedAt: null, version: 1 }, "u1")
     expect(s).toMatchObject({ entry_type: "Imported", entered_by: "Another user", total: 3 })
   })
 

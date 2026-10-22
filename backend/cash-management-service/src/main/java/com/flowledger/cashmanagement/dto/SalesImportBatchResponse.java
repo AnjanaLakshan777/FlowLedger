@@ -7,7 +7,7 @@ import java.util.UUID;
 
 /**
  * One historical sales import. Totals and the period cover the valid rows only. version is checked
- * when the import is approved or rejected.
+ * when the import is approved, rejected or reversed. A REVERSED import keeps its approval details.
  */
 public record SalesImportBatchResponse(
         UUID id,
@@ -32,6 +32,9 @@ public record SalesImportBatchResponse(
         UUID rejectedBy,
         Instant rejectedAt,
         String rejectionReason,
+        UUID reversedBy,
+        Instant reversedAt,
+        String reversalReason,
         int version
 ) {
 }

@@ -17,7 +17,11 @@ public record DailySaleResponse(
         BigDecimal totalSalesAmount,
         EntrySource entrySource,
         UUID recordedBy,
-        Instant recordedAt
+        Instant recordedAt,
+        // Set once the day has been corrected.
+        UUID updatedBy,
+        Instant updatedAt,
+        int version
 ) {
 
     public static DailySaleResponse from(DailySale sale) {
@@ -30,7 +34,10 @@ public record DailySaleResponse(
                 sale.getTotalSalesAmount(),
                 sale.getEntrySource(),
                 sale.getRecordedBy(),
-                sale.getRecordedAt()
+                sale.getRecordedAt(),
+                sale.getUpdatedBy(),
+                sale.getUpdatedAt(),
+                sale.getVersion()
         );
     }
 }

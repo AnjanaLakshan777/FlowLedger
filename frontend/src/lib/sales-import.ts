@@ -15,7 +15,7 @@ export const TEMPLATE_COLUMNS: [string, string][] = [
 ]
 
 const STATUS_LABEL: Record<SalesImportStatus, string> = {
-  PENDING_APPROVAL: "Awaiting approval", APPROVED: "Approved", REJECTED: "Rejected", INVALID: "Invalid",
+  PENDING_APPROVAL: "Awaiting approval", APPROVED: "Approved", REJECTED: "Rejected", INVALID: "Invalid", REVERSED: "Reversed",
 }
 export const importStatusLabel = (s: SalesImportStatus) => STATUS_LABEL[s] ?? s
 

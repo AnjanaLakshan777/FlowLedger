@@ -11,6 +11,8 @@ export interface CurrentUser {
 export interface ApiDailySale {
   id: string; companyId: string; saleDate: string; cashSalesAmount: number; cardSalesAmount: number; totalSalesAmount: number
   entrySource: string; recordedBy: string; recordedAt: string
+  /** Set once the day has been corrected. */
+  updatedBy: string | null; updatedAt: string | null; version: number
 }
 
 export interface ApiBankAccount {
@@ -112,7 +114,7 @@ export interface ForecastVsActual {
 }
 
 /** Historical sales import (cash-management-service). Amounts in LKR; totals cover valid rows only. */
-export type SalesImportStatus = "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "INVALID"
+export type SalesImportStatus = "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "INVALID" | "REVERSED"
 
 export interface ApiSalesImport {
   id: string; fileName: string; status: SalesImportStatus; fileError: string | null
@@ -123,6 +125,8 @@ export interface ApiSalesImport {
   approvedBy: string | null; approvedAt: string | null; approvalNote: string | null
   importedRowCount: number | null; excludedRowCount: number | null
   rejectedBy: string | null; rejectedAt: string | null; rejectionReason: string | null
+  /** Set when an approved import was reversed: its daily sales were deleted. */
+  reversedBy: string | null; reversedAt: string | null; reversalReason: string | null
   version: number
 }
 
@@ -190,6 +194,9 @@ export const flowledger = {
   sales: (c: string) => api<ApiDailySale[]>(`${cash(c)}/sales`),
   recordSale: (c: string, saleDate: string, cashSalesAmount: number, cardSalesAmount: number) =>
     api<ApiDailySale>(`${cash(c)}/sales`, { method: "POST", json: { saleDate, cashSalesAmount, cardSalesAmount } }),
+  /** Corrects a day entered by hand (amounts only), with a reason for the audit history. */
+  correctSale: (c: string, id: string, cashSalesAmount: number, cardSalesAmount: number, reason: string, version: number) =>
+    api<ApiDailySale>(`${cash(c)}/sales/${id}`, { method: "PUT", json: { cashSalesAmount, cardSalesAmount, reason, version } }),
 
   salesImports: (c: string) => api<ApiSalesImportOverview>(`${cash(c)}/sales-imports`),
   salesImport: (c: string, id: string) => api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}`),
@@ -202,6 +209,9 @@ export const flowledger = {
     api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}/approve`, { method: "POST", json: { version, excludeInvalidRows, note } }),
   rejectSalesImport: (c: string, id: string, version: number, reason: string) =>
     api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}/reject`, { method: "POST", json: { version, reason } }),
+  /** Deletes the daily sales an approved import recorded; the import stays as REVERSED history. */
+  reverseSalesImport: (c: string, id: string, version: number, reason: string) =>
+    api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}/reverse`, { method: "POST", json: { version, reason } }),
 
   bankAccounts: (c: string) => api<ApiBankAccount[]>(`${bank(c)}/bank-accounts`),
   createBankAccount: (c: string, body: CreateBankAccountRequest) =>

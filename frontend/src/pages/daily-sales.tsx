@@ -1,10 +1,11 @@
-import { useMemo, useState, type KeyboardEvent } from "react"
-import { CalendarDays, Check, Clock, Info, Lock } from "lucide-react"
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
+import { AlertTriangle, CalendarDays, Check, Clock, Info, Lock, Pencil } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
@@ -25,6 +26,8 @@ export default function DailySalesPage() {
   const { dailySales, currentUser, actions, allow, today: TODAY, now: NOW, mode } = useAppState()
   const live = mode === "live"
   const canEdit = allow("sales.enter")
+  const canCorrect = allow("sales.edit")
+  const [correcting, setCorrecting] = useState<DailySale | null>(null)
   const notReady = useNotReady(["sales"])
   const [saving, setSaving] = useState(false)
   // months that have entries, newest first
@@ -44,7 +47,7 @@ export default function DailySalesPage() {
   const total = (Number.isNaN(cashV) ? 0 : cashV ?? 0) + (Number.isNaN(cardV) ? 0 : cardV ?? 0)
   const existing = dailySales.find((s) => s.sales_date === date)
   const backdated = !!date && daysBetween(date, TODAY) >= 2
-  // the sales service keeps one record per date and has no update yet
+  // the sales service keeps one record per date; a recorded day is changed with Correct in the list
   const locked = live && !!existing
 
   const reset = () => { setCash(""); setCard(""); setNote(""); setErrors({}) }
@@ -106,7 +109,7 @@ export default function DailySalesPage() {
                   <AlertTitle>An entry for {fmt.date(date)} already exists</AlertTitle>
                   <AlertDescription>
                     Recorded {fmt.lkr(existing.total)} on {fmt.dateTimeFull(existing.entered_at)} by {existing.entered_by}.
-                    {locked ? " Recorded sales can't be changed yet." : " Saving will replace it."}
+                    {locked ? (canCorrect && existing.entry_type !== "Imported" ? " Use Correct in the list to change its amounts." : " It can't be changed here.") : " Saving will replace it."}
                   </AlertDescription>
                 </Alert>
               )}
@@ -185,13 +188,94 @@ export default function DailySalesPage() {
               { key: "total", header: "Total (LKR)", numeric: true, sortValue: (r) => r.total, cell: (r) => <b className="font-semibold">{fmt.amt(r.total)}</b> },
               { key: "entered", header: "Entry timestamp", sortValue: (r) => r.entered_at, cell: (r) => <span className="text-muted-foreground whitespace-nowrap">{fmt.dateTime(r.entered_at)}</span> },
               { key: "by", header: "Entered by", sortValue: (r) => r.entered_by, cell: (r) => r.entered_by },
-              { key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (r.entry_type === "Standard" ? <span className="text-muted-foreground">On time</span> : <StatusBadge status={r.entry_type} />) },
+              {
+                key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (
+                  <div className="flex flex-wrap items-center gap-1">
+                    {r.entry_type === "Standard" ? <span className="text-muted-foreground">On time</span> : <StatusBadge status={r.entry_type} />}
+                    {r.corrected_at && <Badge variant="outline" title={`Corrected ${fmt.dateTimeFull(r.corrected_at)}`}>Corrected</Badge>}
+                  </div>
+                ),
+              },
               ...(live ? [] : [{ key: "note", header: "Note", cell: (r: DailySale) => <span className="text-muted-foreground">{r.note}</span> }]),
+              ...(canCorrect ? [{
+                key: "act", header: "", cell: (r: DailySale) => r.entry_type !== "Imported" && (!live || r.id)
+                  ? <Button variant="outline" size="sm" onClick={() => setCorrecting(r)}><Pencil />Correct</Button>
+                  : null,
+              }] : []),
             ]}
             empty="No sales entered yet."
           />
         </Card>}
       </div>
+      <CorrectSaleDialog sale={correcting} onClose={() => setCorrecting(null)} />
     </>
+  )
+}
+
+/**
+ * Corrects the cash and card amounts of a day entered by hand, with a reason kept in the audit history. The date can't
+ * change, and days from a historical import are corrected by reversing that import.
+ */
+function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose: () => void }) {
+  const { actions } = useAppState()
+  const [cash, setCash] = useState("")
+  const [card, setCard] = useState("")
+  const [reason, setReason] = useState("")
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({})
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (!sale) return
+    setCash(sale.cash_sales.toFixed(2)); setCard(sale.card_sales.toFixed(2)); setReason(""); setErrors({})
+  }, [sale])
+
+  async function save(s: DailySale) {
+    const cashV = parseAmount(cash), cardV = parseAmount(card)
+    const e = {
+      cash: cashV == null || Number.isNaN(cashV) || cashV < 0 ? "Enter cash sales (0 if none)." : undefined,
+      card: cardV == null || Number.isNaN(cardV) || cardV < 0 ? "Enter card payments (0 if none)." : undefined,
+      reason: !reason.trim() ? "Say why the amounts are corrected, for example Cash count was wrong." : undefined,
+    }
+    if (!e.cash && !e.card && cashV! + cardV! <= 0) e.cash = "Cash and card can't both be zero."
+    setErrors(e)
+    if (e.cash || e.card || e.reason) return
+    setSaving(true)
+    const err = await actions.correctSale(s, cashV!, cardV!, reason.trim())
+    setSaving(false)
+    if (err) return setErrors({ form: err })
+    toast.success(`Sales for ${fmt.date(s.sales_date)} corrected`, { description: fmt.lkr(cashV! + cardV!) })
+    onClose()
+  }
+
+  return (
+    <Dialog open={!!sale} onOpenChange={(o) => !o && onClose()}>
+      {sale && (
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Correct sales for {fmt.date(sale.sales_date)}</DialogTitle>
+            <DialogDescription>
+              Recorded {fmt.lkr(sale.total)} (cash {fmt.amt(sale.cash_sales)}, card {fmt.amt(sale.card_sales)}). The sales date can't change.
+              The correction and its reason are kept in the audit history.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <Field label="Cash sales (LKR)" htmlFor="cs-cash" error={errors.cash}>
+              <MoneyInput id="cs-cash" value={cash} onChange={setCash} invalid={!!errors.cash} />
+            </Field>
+            <Field label="Card payments (LKR)" htmlFor="cs-card" error={errors.card}>
+              <MoneyInput id="cs-card" value={card} onChange={setCard} invalid={!!errors.card} />
+            </Field>
+          </div>
+          <Field label="Reason" htmlFor="cs-reason" error={errors.reason}>
+            <Textarea id="cs-reason" rows={2} placeholder="e.g. Cash count was wrong" value={reason} onChange={(e) => setReason(e.target.value)}
+              aria-invalid={!!errors.reason || undefined} />
+          </Field>
+          {errors.form && <Alert variant="destructive"><AlertTriangle /><AlertDescription>{errors.form}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button disabled={saving} onClick={() => void save(sale)}>{saving ? "Saving…" : "Save correction"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
   )
 }

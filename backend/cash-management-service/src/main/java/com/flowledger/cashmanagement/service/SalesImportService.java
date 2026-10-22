@@ -2,6 +2,7 @@ package com.flowledger.cashmanagement.service;
 
 import com.flowledger.cashmanagement.dto.ApproveSalesImportRequest;
 import com.flowledger.cashmanagement.dto.RejectSalesImportRequest;
+import com.flowledger.cashmanagement.dto.ReverseSalesImportRequest;
 import com.flowledger.cashmanagement.dto.SalesImportBatchResponse;
 import com.flowledger.cashmanagement.dto.SalesImportDetailResponse;
 import com.flowledger.cashmanagement.dto.SalesImportOverviewResponse;
@@ -192,6 +193,40 @@ public class SalesImportService {
             log.info("Sales import {} rejected", importId);
         });
         return readTransaction.execute(status -> detail(companyId, importId, null, rejecter));
+    }
+
+    /**
+     * Reverses an approved import, for one approved by mistake or with wrong figures: the daily
+     * sales it recorded are deleted and the import stays as REVERSED history with its approval.
+     * Its dates are then free for a corrected import or for entries by hand, and the forecast no
+     * longer reads its rows (only APPROVED imports are sales history).
+     */
+    public SalesImportDetailResponse reverse(Jwt user, UUID companyId, UUID importId,
+                                             ReverseSalesImportRequest request) {
+        companyAccessVerifier.authorize(user, companyId, DECIDE_ROLES);
+        UUID reverser = userId(user);
+        String reason = request.reason().strip();
+
+        writeTransaction.executeWithoutResult(status -> {
+            store.lockCompanyImports(companyId);
+            SalesImportBatchResponse batch = store.lockBatch(companyId, importId)
+                    .orElseThrow(SalesImportNotFoundException::new);
+            if (!"APPROVED".equals(batch.status())) {
+                throw SalesImportConflictException.notApproved();
+            }
+            if (batch.version() != request.version()) {
+                throw SalesImportConflictException.stale();
+            }
+            int deleted = store.deleteImportedSales(importId);
+            if (!store.markReversed(importId, request.version(), reverser, reason)) {
+                throw SalesImportConflictException.stale();
+            }
+            audit.record(companyId, reverser, "SALES_IMPORT_REVERSED", ENTITY_TYPE, importId, reason,
+                    Map.of("status", batch.status(), "version", batch.version()),
+                    Map.of("status", "REVERSED", "deletedDailySaleCount", deleted));
+            log.info("Sales import {} reversed: {} daily sales deleted", importId, deleted);
+        });
+        return readTransaction.execute(status -> detail(companyId, importId, null, reverser));
     }
 
     // The batch locked for a decision: it must exist in the company, wait for approval, and still

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { AlertTriangle, Check, CheckCircle2, Download, FileSpreadsheet, Info, Loader2, Lock, RefreshCw, Upload, XCircle } from "lucide-react"
+import { AlertTriangle, Check, CheckCircle2, Download, FileSpreadsheet, Info, Loader2, Lock, RefreshCw, Undo2, Upload, XCircle } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -43,7 +43,7 @@ const local = (instant: string | null) => (instant ? colomboLocal(instant) : nul
  * the results and only offers the actions the server reports as allowed.
  */
 export default function LiveHistoricalImportPage() {
-  const { company, currentUser } = useAppState()
+  const { company, currentUser, reload } = useAppState()
   const cid = company?.id ?? null
   const me = currentUser?.user_id ?? null
 
@@ -58,6 +58,7 @@ export default function LiveHistoricalImportPage() {
   const [leaveOut, setLeaveOut] = useState(false)
   const [approveOpen, setApproveOpen] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
+  const [reverseOpen, setReverseOpen] = useState(false)
   const [note, setNote] = useState("")
   const [reason, setReason] = useState("")
   const [reasonErr, setReasonErr] = useState<string | null>(null)
@@ -117,23 +118,28 @@ export default function LiveHistoricalImportPage() {
     }
   }
 
-  async function decide(action: "approve" | "reject") {
+  async function decide(action: "approve" | "reject" | "reverse") {
     if (!cid || !batch) return
-    if (action === "reject" && !reason.trim()) return setReasonErr("A reason is required.")
+    if (action !== "approve" && !reason.trim()) return setReasonErr("A reason is required.")
     setBusy(true)
     try {
       const result = action === "approve"
         ? await flowledger.approveSalesImport(cid, batch.id, batch.version, leaveOut, note.trim() || null)
-        : await flowledger.rejectSalesImport(cid, batch.id, batch.version, reason.trim())
+        : action === "reject"
+          ? await flowledger.rejectSalesImport(cid, batch.id, batch.version, reason.trim())
+          : await flowledger.reverseSalesImport(cid, batch.id, batch.version, reason.trim())
       setDetail(result)
-      setApproveOpen(false); setRejectOpen(false); setNote(""); setReason(""); setReasonErr(null)
+      setApproveOpen(false); setRejectOpen(false); setReverseOpen(false); setNote(""); setReason(""); setReasonErr(null)
       if (action === "approve") toast.success("Historical import approved", { description: `${fmt.int(result.batch.importedRowCount ?? 0)} rows recorded as daily sales` })
-      else toast("Import rejected")
+      else if (action === "reject") toast("Import rejected")
+      else toast("Import reversed", { description: "Its daily sales were deleted. Upload a corrected file for these dates." })
       await loadOverview(batch.id)
+      if (action !== "reject") reload("sales")
     } catch (e) {
       const conflict = e instanceof ApiError && e.status === 409
-      toast.error(action === "approve" ? "The import was not approved" : "The import was not rejected", { description: errorMessage(e) })
-      if (conflict) { setApproveOpen(false); setRejectOpen(false); await loadOverview(batch.id) }
+      const verb = action === "approve" ? "approved" : action === "reject" ? "rejected" : "reversed"
+      toast.error(`The import was not ${verb}`, { description: errorMessage(e) })
+      if (conflict) { setApproveOpen(false); setRejectOpen(false); setReverseOpen(false); await loadOverview(batch.id) }
     } finally {
       setBusy(false)
     }
@@ -267,8 +273,22 @@ export default function LiveHistoricalImportPage() {
                     </CardHeader>
                     <CardContent className="grid gap-3">
                       {batch.status === "APPROVED" ? (
-                        <Alert variant="info"><CheckCircle2 /><AlertTitle>Approved by {uploaderLabel(batch.approvedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
-                          <AlertDescription>{fmt.dateTimeFull(local(batch.approvedAt))}. {fmt.int(batch.importedRowCount ?? 0)} rows recorded as daily sales{batch.excludedRowCount ? `, ${batch.excludedRowCount} invalid rows left out` : ""}.{batch.approvalNote ? ` Note: ${batch.approvalNote}` : ""}</AlertDescription></Alert>
+                        <>
+                          <Alert variant="info"><CheckCircle2 /><AlertTitle>Approved by {uploaderLabel(batch.approvedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
+                            <AlertDescription>{fmt.dateTimeFull(local(batch.approvedAt))}. {fmt.int(batch.importedRowCount ?? 0)} rows recorded as daily sales{batch.excludedRowCount ? `, ${batch.excludedRowCount} invalid rows left out` : ""}.{batch.approvalNote ? ` Note: ${batch.approvalNote}` : ""}</AlertDescription></Alert>
+                          {canApprove && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button variant="outline" disabled={busy} onClick={() => setReverseOpen(true)}><Undo2 />Reverse import</Button>
+                              <span className="text-muted-foreground text-xs">Approved with wrong figures? Reverse it, then upload a corrected file.</span>
+                            </div>
+                          )}
+                        </>
+                      ) : batch.status === "REVERSED" ? (
+                        <Alert><Undo2 /><AlertTitle>Reversed by {uploaderLabel(batch.reversedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
+                          <AlertDescription>
+                            {fmt.dateTimeFull(local(batch.reversedAt))}. Reason: {batch.reversalReason}. Its daily sales were deleted; it had been approved
+                            {batch.approvedAt ? ` ${fmt.dateTimeFull(local(batch.approvedAt))}` : ""}. Upload a corrected file for these dates.
+                          </AlertDescription></Alert>
                       ) : batch.status === "REJECTED" ? (
                         <Alert><XCircle /><AlertTitle>Rejected by {uploaderLabel(batch.rejectedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
                           <AlertDescription>{fmt.dateTimeFull(local(batch.rejectedAt))}. Reason: {batch.rejectionReason}. Upload a corrected file to try again.</AlertDescription></Alert>
@@ -340,9 +360,9 @@ export default function LiveHistoricalImportPage() {
                 { key: "rows", header: "Rows", numeric: true, cell: (r) => fmt.int(r.rowCount) },
                 { key: "uploaded", header: "Uploaded", cell: (r) => <CellStack main={fmt.dateTime(local(r.uploadedAt))} sub={uploaderLabel(r.uploadedBy, me)} /> },
                 { key: "status", header: "Status", cell: (r) => <StatusBadge status={importStatusLabel(r.status)} /> },
-                { key: "by", header: "Approved / rejected", cell: (r) => {
-                  const at = r.approvedAt ?? r.rejectedAt
-                  return at ? <CellStack main={uploaderLabel(r.approvedBy ?? r.rejectedBy, me)} sub={fmt.dateTime(local(at))} /> : "—"
+                { key: "by", header: "Decided by", cell: (r) => {
+                  const at = r.reversedAt ?? r.approvedAt ?? r.rejectedAt
+                  return at ? <CellStack main={uploaderLabel(r.reversedBy ?? r.approvedBy ?? r.rejectedBy, me)} sub={fmt.dateTime(local(at))} /> : "—"
                 } },
               ]}
             />
@@ -355,7 +375,7 @@ export default function LiveHistoricalImportPage() {
           <DialogHeader>
             <DialogTitle>Approve historical import?</DialogTitle>
             <DialogDescription>
-              {batch && <>{fmt.int(batch.validRowCount)} rows{batch.periodStart && batch.periodEnd ? ` from ${fmt.date(batch.periodStart)} to ${fmt.date(batch.periodEnd)}` : ""} will be recorded as daily sales.{batch.invalidRowCount > 0 && ` ${batch.invalidRowCount} invalid rows will be left out.`} This cannot be undone.</>}
+              {batch && <>{fmt.int(batch.validRowCount)} rows{batch.periodStart && batch.periodEnd ? ` from ${fmt.date(batch.periodStart)} to ${fmt.date(batch.periodEnd)}` : ""} will be recorded as daily sales.{batch.invalidRowCount > 0 && ` ${batch.invalidRowCount} invalid rows will be left out.`} A Finance Controller or Company Admin can reverse it later if it turns out wrong.</>}
             </DialogDescription>
           </DialogHeader>
           <Field label="Approval note (optional)" htmlFor="appr-note">
@@ -377,6 +397,27 @@ export default function LiveHistoricalImportPage() {
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setRejectOpen(false)}>Cancel</Button>
             <Button variant="destructive" disabled={busy} onClick={() => void decide("reject")}>{busy && <Loader2 className="animate-spin" />}Reject import</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reverseOpen} onOpenChange={(o) => !busy && setReverseOpen(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reverse this import?</DialogTitle>
+            <DialogDescription>
+              {batch && <>The {fmt.int(batch.importedRowCount ?? 0)} daily sales it recorded
+                {batch.periodStart && batch.periodEnd ? ` (${fmt.date(batch.periodStart)} to ${fmt.date(batch.periodEnd)})` : ""} are deleted and the
+                forecast stops using its figures. The import stays in the history as reversed. Its dates and file can then be imported again.</>}
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Reason for reversing" htmlFor="rev" error={reasonErr}>
+            <Textarea id="rev" maxLength={500} value={reason} onChange={(e) => { setReason(e.target.value); setReasonErr(null) }}
+              placeholder="e.g. Figures were for 2024, not 2025" aria-invalid={!!reasonErr || undefined} />
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setReverseOpen(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={busy} onClick={() => void decide("reverse")}>{busy && <Loader2 className="animate-spin" />}Reverse import</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

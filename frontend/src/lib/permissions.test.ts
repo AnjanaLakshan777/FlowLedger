@@ -14,12 +14,14 @@ describe("role permissions", () => {
     expect(pagesFor("CASHIER")).toEqual(["daily-sales"])
     expect(can("CASHIER", "sales.enter")).toBe(true)
     expect(can("CASHIER", "import.upload")).toBe(false)
+    // The Cashier records sales; corrections are for the Accountant and above.
+    expect(can("CASHIER", "sales.edit")).toBe(false)
     expect(homePage("CASHIER")).toBe("daily-sales")
   })
 
   it("Accountant: finance pages, enters sales, imports history and monthly bank data, records bounced cheques", () => {
     expect(pagesFor("ACCOUNTANT")).toEqual(FINANCE)
-    for (const p of ["sales.enter", "import.upload", "bank.importMonthly", "cheques.bounce"] as Permission[]) expect(can("ACCOUNTANT", p)).toBe(true)
+    for (const p of ["sales.enter", "sales.edit", "import.upload", "bank.importMonthly", "cheques.bounce"] as Permission[]) expect(can("ACCOUNTANT", p)).toBe(true)
     for (const p of ["import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "users.manage", "roles.assign", "settings.manage"] as Permission[]) {
       expect(can("ACCOUNTANT", p)).toBe(false)
     }

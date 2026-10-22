@@ -9,7 +9,8 @@ const batch = (over: Partial<ApiSalesImport> = {}): ApiSalesImport => ({
   id: "b1", fileName: "history.csv", status: "PENDING_APPROVAL", fileError: null, periodStart: "2025-01-01", periodEnd: "2025-12-31",
   rowCount: 365, validRowCount: 365, invalidRowCount: 0, duplicateRowCount: 0, cashSalesTotal: 1, cardSalesTotal: 2,
   uploadedBy: "u1", uploadedAt: "2026-10-15T10:00:00Z", approvedBy: null, approvedAt: null, approvalNote: null,
-  importedRowCount: null, excludedRowCount: null, rejectedBy: null, rejectedAt: null, rejectionReason: null, version: 1, ...over,
+  importedRowCount: null, excludedRowCount: null, rejectedBy: null, rejectedAt: null, rejectionReason: null,
+  reversedBy: null, reversedAt: null, reversalReason: null, version: 1, ...over,
 })
 
 const row = (over: Partial<ApiSalesImportRow> = {}): ApiSalesImportRow => ({

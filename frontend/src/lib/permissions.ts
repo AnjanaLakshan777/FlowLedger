@@ -19,7 +19,7 @@ export type Permission =
   | "page.dashboard" | "page.daily-sales" | "page.historical-import" | "page.bank-account" | "page.cheques"
   | "page.forecast" | "page.forecast-vs-actual" | "page.users-settings"
   // finance actions
-  | "sales.enter" | "import.upload" | "import.approve" | "cheques.manage" | "bank.retrySync" | "bank.enterData" | "bank.importMonthly" | "cheques.bounce"
+  | "sales.enter" | "import.upload" | "import.approve" | "cheques.manage" | "bank.retrySync" | "bank.enterData" | "bank.importMonthly" | "cheques.bounce" | "sales.edit"
   // system actions
   | "bank.configure" | "users.manage" | "roles.assign" | "settings.manage"
   // audit history (the Audit History page is not in the MVP UI; the access-change log is shown to System Admins)
@@ -29,7 +29,7 @@ const FINANCE_PAGES: Permission[] = [
   "page.dashboard", "page.daily-sales", "page.historical-import", "page.bank-account", "page.cheques", "page.forecast", "page.forecast-vs-actual",
 ]
 const ALL: Permission[] = [
-  ...FINANCE_PAGES, "page.users-settings", "sales.enter", "import.upload", "import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "bank.importMonthly", "cheques.bounce",
+  ...FINANCE_PAGES, "page.users-settings", "sales.enter", "import.upload", "import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "bank.importMonthly", "cheques.bounce", "sales.edit",
   "bank.configure", "users.manage", "roles.assign", "settings.manage", "audit.financial", "audit.security",
 ]
 
@@ -37,9 +37,9 @@ export const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // daily cash and card sales only
   CASHIER: new Set<Permission>(["page.daily-sales", "sales.enter"]),
   // enters sales, imports history and each month's bank transactions, records bounced cheques, views finance pages
-  ACCOUNTANT: new Set<Permission>([...FINANCE_PAGES, "sales.enter", "import.upload", "bank.importMonthly", "cheques.bounce"]),
+  ACCOUNTANT: new Set<Permission>([...FINANCE_PAGES, "sales.enter", "sales.edit", "import.upload", "bank.importMonthly", "cheques.bounce"]),
   // all finance operations and financial audit history; no user, role or system administration
-  FINANCE_CONTROLLER: new Set<Permission>([...FINANCE_PAGES, "sales.enter", "import.upload", "import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "bank.importMonthly", "cheques.bounce", "audit.financial"]),
+  FINANCE_CONTROLLER: new Set<Permission>([...FINANCE_PAGES, "sales.enter", "sales.edit", "import.upload", "import.approve", "cheques.manage", "bank.retrySync", "bank.enterData", "bank.importMonthly", "cheques.bounce", "audit.financial"]),
   // everything
   SYSTEM_ADMIN: new Set<Permission>(ALL),
 }
@@ -56,7 +56,7 @@ export const PERMISSION_LABEL: [Permission, string][] = [
   ["page.dashboard", "Dashboard"], ["page.daily-sales", "Daily Sales"], ["page.historical-import", "Historical Sales Import"],
   ["page.bank-account", "Bank Account"], ["page.cheques", "Cheque Payments"], ["page.forecast", "Cash-Flow Forecast"],
   ["page.forecast-vs-actual", "Forecast vs Actual"], ["page.users-settings", "Users & Settings"],
-  ["sales.enter", "Enter daily sales"], ["import.upload", "Upload historical sales file"], ["import.approve", "Approve historical import"],
+  ["sales.enter", "Enter daily sales"], ["sales.edit", "Correct daily sales entered by hand"], ["import.upload", "Upload historical sales file"], ["import.approve", "Approve historical import"],
   ["cheques.manage", "Add, edit and cancel cheque payments"], ["cheques.bounce", "Record bounced cheques"], ["bank.retrySync", "Retry bank sync"], ["bank.enterData", "Enter bank data and classify transactions"],
   ["bank.importMonthly", "Import each month's bank transactions"], ["bank.configure", "Configure bank integration"],
   ["users.manage", "Create and deactivate users"], ["roles.assign", "Assign roles"], ["settings.manage", "Company and system settings"],

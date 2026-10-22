@@ -70,7 +70,7 @@ export function toDailySale(s: ApiDailySale, currentUserId: string | null): Dail
     entered_by: s.recordedBy === currentUserId ? "You" : "Another user",
     // Imported history is entered long after the sale date by design; it is not a backdated entry.
     entry_type: s.entrySource === "HISTORICAL_IMPORT" ? "Imported" : daysBetween(s.saleDate, enteredAt.slice(0, 10)) >= 2 ? "Backdated" : "Standard",
-    note: "",
+    note: "", id: s.id, version: s.version, corrected_at: s.updatedAt ? colomboLocal(s.updatedAt) : null,
   }
 }
 

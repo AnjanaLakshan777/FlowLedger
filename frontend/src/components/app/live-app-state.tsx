@@ -199,9 +199,10 @@ function useLiveStateValue(): AppState {
           reload("sales")
           return null
         } catch (e) {
-          return e instanceof ApiError && e.status === 409 ? "Sales for this date are already recorded. A recorded day can't be changed yet." : errorMessage(e)
+          return e instanceof ApiError && e.status === 409 ? "Sales for this date are already recorded. Correct the recorded day instead." : errorMessage(e)
         }
       },
+      correctSale: (s, cash, card, reason) => run(() => flowledger.correctSale(cid!, s.id!, cash, card, reason, s.version!), () => reload("sales")),
       addCheque: (c) => run(() => flowledger.addCheque(cid!, toChequeRequest(c)), chequesChanged),
       updateCheque: (original, c) =>
         run(() => flowledger.updateCheque(cid!, original.id!, toChequeRequest({ ...c, id: original.id, version: original.version })), chequesChanged),

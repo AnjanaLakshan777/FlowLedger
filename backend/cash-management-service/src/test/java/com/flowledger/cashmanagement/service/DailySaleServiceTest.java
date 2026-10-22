@@ -78,7 +78,7 @@ class DailySaleServiceTest {
     }
 
     private DailySaleService serviceAt(Instant instant) {
-        return new DailySaleService(repository, companyAccessVerifier, Clock.fixed(instant, COLOMBO), transactionManager);
+        return new DailySaleService(repository, null, companyAccessVerifier, Clock.fixed(instant, COLOMBO), transactionManager);
     }
 
     private static CreateDailySaleRequest request(LocalDate saleDate) {

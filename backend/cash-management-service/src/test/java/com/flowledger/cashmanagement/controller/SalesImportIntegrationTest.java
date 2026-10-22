@@ -342,6 +342,61 @@ class SalesImportIntegrationTest {
                 """, String.class, companyId)).isEqualTo("Totals do not match the ledger");
     }
 
+    // Reversal
+
+    @Test
+    void shouldReverseAnApprovedImportAndFreeItsDatesAndFile() throws Exception {
+        identityService.grant(companyId, "FINANCE_CONTROLLER");
+        String content = csv("2025-01-01,100.00,200.50", "2025-01-02,0,0");
+        String id = id(upload(financeController, "history.csv", content).andReturn().getResponse().getContentAsString());
+        approve(financeController, id, 1, false).andExpect(status().isOk());
+
+        reverse(financeController, id, 2, "  ").andExpect(status().isBadRequest());
+        reverse(financeController, id, 1, "Wrong year").andExpect(status().isConflict());
+        reverse(financeController, id, 2, "Figures were for 2024, not 2025")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.batch.status").value("REVERSED"))
+                .andExpect(jsonPath("$.batch.reversedBy").value(financeController.toString()))
+                .andExpect(jsonPath("$.batch.reversedAt").exists())
+                .andExpect(jsonPath("$.batch.reversalReason").value("Figures were for 2024, not 2025"))
+                // The approval stays on record.
+                .andExpect(jsonPath("$.batch.approvedBy").value(financeController.toString()))
+                .andExpect(jsonPath("$.batch.version").value(3));
+
+        assertThat(count("SELECT count(*) FROM daily_sales WHERE company_id = ?")).isZero();
+        assertThat((String) jdbcTemplate.queryForObject("""
+                SELECT after_data::text FROM cash_management_audit_events WHERE company_id = ? AND action = 'SALES_IMPORT_REVERSED'
+                """, String.class, companyId)).contains("\"deletedDailySaleCount\": 1");
+        // No longer sales history for the forecast.
+        mockMvc.perform(get("/api/v1/cash-management/companies/" + companyId + "/sales-history?from=2025-01-01&to=2025-01-31")
+                        .with(user(financeController)))
+                .andExpect(jsonPath("$.days", org.hamcrest.Matchers.hasSize(0)));
+        reverse(financeController, id, 3, "Again").andExpect(status().isConflict());
+
+        // The same file and its dates can be imported again.
+        String again = id(upload(financeController, "history.csv", content)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.batch.status").value("PENDING_APPROVAL"))
+                .andReturn().getResponse().getContentAsString());
+        approve(financeController, again, 1, false).andExpect(status().isOk());
+        assertThat(count("SELECT count(*) FROM daily_sales WHERE company_id = ?")).isEqualTo(1);
+    }
+
+    @Test
+    void shouldLetOnlyApproversReverseAndNotAPendingImport() throws Exception {
+        identityService.grant(companyId, "FINANCE_CONTROLLER");
+        String id = id(upload(financeController, "history.csv", csv("2025-01-01,1,1"))
+                .andReturn().getResponse().getContentAsString());
+        reverse(financeController, id, 1, "Not approved yet").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Only an approved import can be reversed."));
+        approve(financeController, id, 1, false).andExpect(status().isOk());
+
+        identityService.grant(companyId, "ACCOUNTANT");
+        reverse(accountant, id, 2, "Wrong").andExpect(status().isForbidden());
+        identityService.grant(companyId, "COMPANY_ADMIN");
+        reverse(UUID.randomUUID(), id, 2, "Wrong").andExpect(status().isOk());
+    }
+
     // Roles and companies
 
     @Test
@@ -499,6 +554,12 @@ class SalesImportIntegrationTest {
 
     private ResultActions reject(UUID userId, String id, int version, String reason) throws Exception {
         return mockMvc.perform(post(importsUrl(companyId) + "/" + id + "/reject").with(user(userId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": %d, \"reason\": \"%s\"}".formatted(version, reason)));
+    }
+
+    private ResultActions reverse(UUID userId, String id, int version, String reason) throws Exception {
+        return mockMvc.perform(post(importsUrl(companyId) + "/" + id + "/reverse").with(user(userId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"version\": %d, \"reason\": \"%s\"}".formatted(version, reason)));
     }

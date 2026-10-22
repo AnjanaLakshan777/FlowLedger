@@ -33,6 +33,11 @@ public class SalesImportConflictException extends ErrorResponseException {
                 "This import is not waiting for approval."));
     }
 
+    public static SalesImportConflictException notApproved() {
+        return new SalesImportConflictException(ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "Only an approved import can be reversed."));
+    }
+
     public static SalesImportConflictException stale() {
         return new SalesImportConflictException(ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
                 "This import was changed by someone else. Reload it and try again."));

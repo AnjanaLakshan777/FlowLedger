@@ -363,6 +363,78 @@ class DailySaleControllerIntegrationTest {
         assertThat(countSales(companyId)).isEqualTo(1);
     }
 
+    // Corrections
+
+    @Test
+    void shouldCorrectAManualEntryAndAuditIt() throws Exception {
+        UUID saleId = insertSale(companyId, today.minusDays(2), "35000.00", "15000.00");
+
+        update(saleId, "36000.50", "15000.00", "  Cash count was wrong  ", 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cashSalesAmount").value(36000.50))
+                .andExpect(jsonPath("$.totalSalesAmount").value(51000.50))
+                .andExpect(jsonPath("$.saleDate").value(today.minusDays(2).toString()))
+                .andExpect(jsonPath("$.updatedBy").value(userId.toString()))
+                .andExpect(jsonPath("$.updatedAt").isNotEmpty())
+                .andExpect(jsonPath("$.version").value(2));
+
+        Map<String, Object> audit = jdbcTemplate.queryForMap("""
+                SELECT action, actor_user_id, reason, before_data ->> 'cashSalesAmount' AS before_cash,
+                       after_data ->> 'cashSalesAmount' AS after_cash
+                FROM cash_management_audit_events WHERE entity_id = ?
+                """, saleId);
+        assertThat(audit).containsEntry("action", "DAILY_SALE_CORRECTED").containsEntry("actor_user_id", userId)
+                .containsEntry("reason", "Cash count was wrong").containsEntry("before_cash", "35000.00")
+                .containsEntry("after_cash", "36000.50");
+    }
+
+    @Test
+    void shouldRefuseStaleImportedOrEmptyCorrections() throws Exception {
+        UUID saleId = insertSale(companyId, today.minusDays(2), "35000.00", "15000.00");
+
+        update(saleId, "1.00", "0.00", "Wrong", 2).andExpect(status().isConflict());
+        update(saleId, "0.00", "0.00", "Wrong", 1).andExpect(status().isBadRequest());
+        update(saleId, "1.00", "0.00", " ", 1).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.reason").value("reason must not be blank"));
+        update(UUID.randomUUID(), "1.00", "0.00", "Wrong", 1).andExpect(status().isNotFound());
+
+        UUID batchId = jdbcTemplate.queryForObject("""
+                INSERT INTO sales_import_batches (company_id, original_filename, file_sha256, file_size_bytes, status,
+                    row_count, valid_row_count, invalid_row_count, duplicate_row_count, cash_sales_total, card_sales_total,
+                    uploaded_by, approved_by, approved_at, imported_row_count, excluded_row_count)
+                VALUES (?, 'a.csv', repeat('a', 64), 10, 'APPROVED', 1, 1, 0, 0, 1, 1, ?, ?, now(), 1, 0)
+                RETURNING id
+                """, UUID.class, companyId, UUID.randomUUID(), UUID.randomUUID());
+        UUID imported = jdbcTemplate.queryForObject("""
+                INSERT INTO daily_sales (company_id, sale_date, cash_sales_amount, card_sales_amount, entry_source,
+                                         recorded_by, import_batch_id)
+                VALUES (?, ?, 1, 1, 'HISTORICAL_IMPORT', ?, ?) RETURNING id
+                """, UUID.class, companyId, today.minusDays(400), UUID.randomUUID(), batchId);
+        update(imported, "2.00", "1.00", "Wrong", 1)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("reversing the import")));
+    }
+
+    @Test
+    void shouldLetOnlyTheAccountantAndAboveCorrect() throws Exception {
+        UUID saleId = insertSale(companyId, today.minusDays(2), "35000.00", "15000.00");
+        identityService.reset();
+        identityService.grant(companyId, "CASHIER");
+        update(saleId, "1.00", "0.00", "Wrong", 1).andExpect(status().isForbidden());
+
+        identityService.reset();
+        identityService.grant(companyId, "ACCOUNTANT");
+        update(saleId, "1.00", "0.00", "Wrong", 1).andExpect(status().isOk());
+    }
+
+    private ResultActions update(UUID saleId, String cash, String card, String reason, int version) throws Exception {
+        return mockMvc.perform(authenticated(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put(salesUrl(companyId) + "/" + saleId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(Map.of("cashSalesAmount", cash, "cardSalesAmount", card,
+                        "reason", reason, "version", version))));
+    }
+
     private void assertSaleDates(String query, String... expectedDates) throws Exception {
         mockMvc.perform(authenticated(get(salesUrl(companyId) + query)))
                 .andExpect(status().isOk())

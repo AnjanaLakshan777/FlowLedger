@@ -744,7 +744,18 @@ before production.
   keys.
 - API: `POST` and `GET /api/v1/cash-management/companies/{companyId}/sales`
   (optional inclusive `from` and `to` sale-date filters, newest first), and
-  `GET .../sales/{saleId}`. There is no update or delete endpoint.
+  `GET .../sales/{saleId}`, and `PUT .../sales/{saleId}` (correction). There
+  is no delete endpoint.
+- Corrections (confirmed by the product owner, 2026-10-22): `ACCOUNTANT`,
+  `FINANCE_CONTROLLER`, and `COMPANY_ADMIN` may correct the cash and card
+  amounts of a day entered by hand (`entry_source = 'UI'`); the Cashier
+  records sales but does not correct them. The body is `cashSalesAmount`,
+  `cardSalesAmount`, a required `reason`, and the `version` read (409 when
+  stale). The sale date cannot change. A day from an approved import gives
+  409: it is corrected by reversing the import (Historical Sales Import).
+  Each correction sets `updated_by`/`updated_at`, increments `version`, and
+  writes `DAILY_SALE_CORRECTED` to `cash_management_audit_events` with the
+  reason and the amounts before and after; unchanged amounts save nothing.
 - One record per company per sale date, holding `cashSalesAmount` and
   `cardSalesAmount` (`NUMERIC(19,2)`, each at least 0, at most two decimal
   places). Their total must be greater than 0. A second record for the same
@@ -789,9 +800,7 @@ before production.
 
 ### Known Limitations
 
-- Recorded sales cannot be corrected. The table has `updated_by`,
-  `updated_at`, and `version` for later corrections, but no update rules are
-  defined yet.
+- A recorded day cannot be deleted, and its date cannot be changed.
 - Manual daily sales entries do not write to `cash_management_audit_events`
   (imports do), and there is no outbox. A comprehensive audit-event
   implementation remains outstanding.
@@ -894,6 +903,24 @@ marked provisional are implementation decisions to review.
 - Approved imports produce daily sales. Nothing is pushed to other services
   (no outbox event); forecast-service reads them through the sales-history
   API below when it creates a forecast.
+
+### Reversing an Approved Import
+
+Confirmed by the product owner (2026-10-22).
+
+- `POST /sales-imports/{importId}/reverse` with `version` and a required
+  `reason`, for `FINANCE_CONTROLLER` and `COMPANY_ADMIN` (the roles that
+  approve); Accountants and Cashiers get 403. Only an `APPROVED` import can
+  be reversed (409 otherwise, and for a stale version).
+- In one transaction: the daily sales the import recorded are deleted, the
+  batch becomes `REVERSED` with `reversed_by`, `reversed_at`, and
+  `reversal_reason` (it keeps its approval details), and
+  `SALES_IMPORT_REVERSED` is audited with the number of daily sales deleted.
+  Migration `V3__add_sales_import_reversal.sql` adds the status and columns.
+- Afterwards its rows are no longer sales history (the forecast reads
+  approved imports only), and its dates and file are free: the same or a
+  corrected file can be uploaded and approved again, or the days entered by
+  hand. The whole import is reversed; there is no partial reversal.
 
 ### Sales History API
 
@@ -1691,7 +1718,11 @@ retry; the frontend never falls back to demonstration data.
 ### Known Limitations
 
 - Daily sales have no note and no recorder name in the API; the screen shows
-  "You" or "Another user", and a recorded date cannot be changed.
+  "You" or "Another user", and a recorded date cannot be changed. Daily
+  Sales has a "Correct" action (Accountant and above) on days entered by
+  hand, asking for the amounts and a reason, and marks corrected days;
+  Historical Sales Import has "Reverse import" on approved imports (Finance
+  Controller and Company Admin).
 - Bank transactions have no value date in the API.
 - With monthly imports the latest confirmed balance is the end of last
   month, so the forecast starts on the 1st of the current month and is
@@ -1851,8 +1882,6 @@ The following must be researched or agreed before implementation:
 - Whether account types other than `CURRENT`, or more than one active account
   per company, are needed after the MVP, and how a current account is
   replaced or deactivated.
-- Who may correct recorded sales, under what conditions, and how corrections
-  are audited.
 - The React UI still has a single `SYSTEM_ADMIN` role that represents the
   company administrator, and no `COMPANY_ADMIN` or platform-admin screens.
   Updating the frontend to the confirmed role architecture (section 4) is
@@ -1909,18 +1938,18 @@ The following must be researched or agreed before implementation:
   tokens early (it would then need the token key or a public-key setup).
 - Token lifetime handling in the browser: there are no refresh tokens, so a
   user signs in again after the access token expires.
-- Whether daily sales may be corrected, whether they carry a note, and
-  whether other users may see who recorded them (the API has no name).
+- Whether daily sales carry a note, and whether other users may see who
+  recorded them (the API has no name).
 - An API listing companies for a platform administrator, and invitation by
   email (users are created with a temporary password for now).
 - Historical sales import: whether an import's invalid rows may be left out
   at approval (currently yes, explicitly) or must be fixed; whether
   Accountants should see all imports of the company (currently only their
   own); whether a Company Admin may upload (currently not); whether the uploader may approve their own import (currently
-  allowed for a Finance Controller); XLSX support; how an approved import is
-  corrected or reversed; whether a manual daily sale may later be entered for
-  a day an approved import recorded as zero; and how users' names reach the
-  screen.
+  allowed for a Finance Controller); XLSX support; whether a manual daily
+  sale may later be entered for a day an approved import recorded as zero;
+  whether part of an approved import (some dates) can be reversed instead of
+  all of it; and how users' names reach the screen.
 - Whether a company should be able to choose `WEEKDAY_AVERAGE` again, and an
   API to change forecast configuration.
 - The sample bank statement in the bank-integration test resources contains

@@ -2,6 +2,7 @@ package com.flowledger.cashmanagement.controller;
 
 import com.flowledger.cashmanagement.dto.ApproveSalesImportRequest;
 import com.flowledger.cashmanagement.dto.RejectSalesImportRequest;
+import com.flowledger.cashmanagement.dto.ReverseSalesImportRequest;
 import com.flowledger.cashmanagement.dto.SalesImportDetailResponse;
 import com.flowledger.cashmanagement.dto.SalesImportOverviewResponse;
 import com.flowledger.cashmanagement.service.SalesImportService;
@@ -64,5 +65,14 @@ public class SalesImportController {
                                             @PathVariable UUID importId,
                                             @Valid @RequestBody RejectSalesImportRequest request) {
         return salesImportService.reject(user, companyId, importId, request);
+    }
+
+    // Deletes the daily sales an approved import recorded; the import stays as REVERSED history.
+    @PostMapping("/{importId}/reverse")
+    public SalesImportDetailResponse reverse(@AuthenticationPrincipal Jwt user,
+                                             @PathVariable UUID companyId,
+                                             @PathVariable UUID importId,
+                                             @Valid @RequestBody ReverseSalesImportRequest request) {
+        return salesImportService.reverse(user, companyId, importId, request);
     }
 }
