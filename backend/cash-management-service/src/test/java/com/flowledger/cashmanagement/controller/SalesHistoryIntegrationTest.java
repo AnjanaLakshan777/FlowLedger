@@ -55,6 +55,11 @@ class SalesHistoryIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @org.springframework.beans.factory.annotation.Value("${flowledger.security.internal-api.secret}")
+    private String internalKey;
+
+    private static final String KEY_HEADER = "X-Internal-Api-Key";
+
     private UUID companyId;
     private UUID controller;
 
@@ -152,6 +157,32 @@ class SalesHistoryIntegrationTest {
                 .andExpect(jsonPath("$.days", hasSize(0)));
         mockMvc.perform(get(historyUrl(UUID.randomUUID()) + "?from=2025-01-01&to=2025-01-31").with(user(controller)))
                 .andExpect(status().isForbidden());
+    }
+
+    // Internal API for forecast-service's daily scheduled forecast
+
+    @Test
+    void shouldServeTheSameHistoryThroughTheInternalApiWithTheKey() throws Exception {
+        approved("a.csv", "2025-01-01,100.00,50.50");
+        manual("2025-01-02", "5.00", "0.00");
+
+        mockMvc.perform(get(internalUrl(companyId) + "?from=2025-01-01&to=2025-01-31").header(KEY_HEADER, internalKey))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.days", hasSize(2)))
+                .andExpect(jsonPath("$.days[1].entrySource").value("UI"));
+        mockMvc.perform(get(internalUrl(companyId) + "?from=2025-01-31&to=2025-01-01").header(KEY_HEADER, internalKey))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void shouldRefuseTheInternalApiWithoutTheKeyOrWithAUserToken() throws Exception {
+        mockMvc.perform(get(internalUrl(companyId) + "?from=2025-01-01&to=2025-01-31")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(internalUrl(companyId) + "?from=2025-01-01&to=2025-01-31").with(user(controller)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    private static String internalUrl(UUID company) {
+        return "/internal/v1/cash-management/companies/" + company + "/sales-history";
     }
 
     // Helpers

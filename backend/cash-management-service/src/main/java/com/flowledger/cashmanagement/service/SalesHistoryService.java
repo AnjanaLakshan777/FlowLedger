@@ -44,6 +44,14 @@ public class SalesHistoryService {
 
     public SalesHistoryResponse approvedHistory(Jwt user, UUID companyId, LocalDate from, LocalDate to) {
         companyAccessVerifier.verify(user, companyId, HISTORY_ROLES);
+        return history(companyId, from, to);
+    }
+
+    /**
+     * The same history without a user, for forecast-service's daily scheduled forecast through the
+     * internal API; only callers with the internal API key get here.
+     */
+    public SalesHistoryResponse history(UUID companyId, LocalDate from, LocalDate to) {
         if (from == null || to == null) {
             throw new InvalidDailySaleException(from == null ? "from" : "to", "from and to are required");
         }

@@ -669,6 +669,19 @@ are shown as cleared from these transactions (section 11).
   classifier; `BankTransactionImported` carries that category. The closing
   balance is recorded as of 23:59:59 on the month's last day.
 
+### Internal API
+
+Added 2026-10-22 for forecast-service's daily scheduled forecast, which runs
+without a user. Under `/internal/v1/bank-integration/companies/{companyId}`,
+read-only and with the same answers as the public reads: `GET
+/bank-accounts`, `GET /bank-accounts/{id}/balance-snapshots/latest` (404
+without a balance), `GET /statement-imports`, and `GET /bank-transactions`
+(`bankAccountId`, `from`, `to` required). Authenticated only by
+`X-Internal-Api-Key` = `BANK_INTEGRATION_INTERNAL_API_SECRET` (at least 32
+characters, different from the identity key, else startup fails; unset
+refuses every internal request); user tokens are not accepted, nothing is
+audited, and the API gateway does not route `/internal/**`.
+
 ### Statement Authorization, Classification, and Audit
 
 - Role policy:
@@ -900,6 +913,13 @@ marked provisional are implementation decisions to review.
   history here, not only their own imports); `CASHIER` and outsiders 403.
   Read by forecast-service with the user's own token, like the bank inputs;
   no copy of the sales history is kept in forecast-service.
+- Internal API (2026-10-22, for the daily scheduled forecast):
+  `GET /internal/v1/cash-management/companies/{companyId}/sales-history`,
+  the same answer and validation without a user, authenticated only by
+  `X-Internal-Api-Key` = `CASH_MANAGEMENT_INTERNAL_API_SECRET` (at least 32
+  characters, different from the identity key, else startup fails; unset
+  refuses every internal request). User tokens are not accepted there, and
+  the API gateway does not route `/internal/**`.
 
 ## 9. Provisional Payment Rules
 
@@ -1456,6 +1476,30 @@ stored but not used by forecast calculations yet.
 - VERIFIED is a statement about the time of the check. Later changes are
   not tracked against it; forecasts bound its age (next section).
 
+### Daily Scheduled Forecast
+
+Requested by the product owner (2026-10-22) in addition to the run made
+when a forecast screen opens.
+
+- Every day at `FORECAST_DAILY_RUN_CRON` (default 06:30 `Asia/Colombo`),
+  forecast-service makes a run for each company whose users made a
+  (`MANUAL`) forecast in the last 30 days (`as_of_at`; configurable as
+  `flowledger.daily-forecast.active-within-days`). Off with
+  `FORECAST_DAILY_RUN_ENABLED=false`.
+- Same calculation, inputs, rules and same-inputs check as a user's run, so
+  a day whose inputs did not change saves no copy. The run is `SCHEDULED`
+  with no `triggered_by`; a configuration it has to create is created by the
+  nil UUID, as in migration V6.
+- No user token exists at that time, so the inputs come from the
+  services' internal APIs with internal API keys
+  (`BANK_INTEGRATION_INTERNAL_API_SECRET`,
+  `CASH_MANAGEMENT_INTERNAL_API_SECRET`; section 7 and 8), and cheques from
+  the verified projection as always. Without a key, every company is skipped.
+- Each company is independent: one that cannot be forecast (no current
+  account or confirmed balance, cheque data not verified, a service down) is
+  logged and skipped, and the job continues. The job logs how many runs were
+  made, unchanged, and not made.
+
 ### Forecast Use of Historical Sales
 
 - Recorded sales (approved imports and manual daily sales) reach the
@@ -1539,10 +1583,15 @@ Confirmed for Feature 2, milestone 4.
 - Automated tests use fakes for the other services; the full flow was also
   run once by hand against the running services (identity, bank-integration,
   payment, forecast, cash-management) with test data.
-- Runs are created on request only: the frontend requests one whenever the
-  Dashboard or Cash-Flow Forecast screen opens (section 11). There are no
-  server-side scheduled runs, so a day nobody opens those screens has no
-  run, and no outbox events.
+- Runs are created on request (the frontend asks for one whenever the
+  Dashboard or Cash-Flow Forecast screen opens, section 11) and by the daily
+  scheduled forecast (below). There are no data-change runs and no outbox
+  events.
+- The daily scheduled forecast chooses companies by recent use, not from
+  identity-service: a company whose users made no forecast in 30 days gets
+  no daily run, and a deactivated company keeps getting one until 30 days
+  after its users' last forecast. With several forecast-service instances each runs the job;
+  the same-inputs check keeps it to one saved run per company and day.
 - The cheque projection is not used by calculations and is not verified;
   until a backfill run has completed it only holds cheques changed after
   payment-service's outbox activation boundary. A completed run is not
@@ -1791,8 +1840,9 @@ The following must be researched or agreed before implementation:
 - The permission matrix for features not built yet (company settings)
   across services.
 - Production-grade service-to-service authentication (for example mTLS) to
-  replace the shared `IDENTITY_INTERNAL_API_SECRET`, and whether membership
-  answers may be cached and for how long.
+  replace the shared `IDENTITY_INTERNAL_API_SECRET` and the other services'
+  internal API keys (payment, bank-integration, cash-management), and
+  whether membership answers may be cached and for how long.
 - Account-number policy: whether full account numbers are stored (encrypted)
   and how keys are managed; whether account numbers must be unique.
 - Whether account types other than `CURRENT`, or more than one active account

@@ -5,6 +5,7 @@ import com.flowledger.forecast.calculation.ExpectedCheque;
 import com.flowledger.forecast.calculation.ExpectedInflow;
 import com.flowledger.forecast.calculation.InflowEstimateStatus;
 import com.flowledger.forecast.entity.DataQuality;
+import com.flowledger.forecast.entity.TriggerType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -48,6 +49,8 @@ public class ForecastRunStore {
             String modelVersion,
             Map<String, Object> configSnapshot,
             String inputSnapshotHash,
+            TriggerType triggerType,
+            // The user who asked for the run; null for a scheduled run.
             UUID triggeredBy,
             Instant completedAt
     ) {
@@ -61,12 +64,12 @@ public class ForecastRunStore {
                              horizon_start_date, horizon_end_date, opening_balance_amount, opening_balance_as_of,
                              currency, balance_stale, inflow_estimate_status, data_quality, model_version,
                              config_snapshot, input_snapshot_hash, triggered_by, completed_at)
-                        VALUES (?, ?, ?, 'SUCCEEDED', 'MANUAL', ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?, ?, ?)
+                        VALUES (?, ?, ?, 'SUCCEEDED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?, ?, ?)
                         ON CONFLICT (company_id, input_snapshot_hash) WHERE input_snapshot_hash IS NOT NULL
                         DO NOTHING
                         RETURNING id
                         """,
-                UUID.class, run.companyId(), run.configId(), run.bankAccountId(), utc(run.asOfAt()),
+                UUID.class, run.companyId(), run.configId(), run.bankAccountId(), run.triggerType().name(), utc(run.asOfAt()),
                 run.horizonStart(), run.horizonEnd(), run.openingBalance(), utc(run.openingBalanceAsOf()),
                 run.currency(), run.balanceStale(), run.inflowEstimateStatus().name(),
                 jsonMapper.writeValueAsString(run.dataQuality()), run.modelVersion(),

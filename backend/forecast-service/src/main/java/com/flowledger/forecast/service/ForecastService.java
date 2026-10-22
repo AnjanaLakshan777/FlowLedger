@@ -14,12 +14,14 @@ import com.flowledger.forecast.client.BankIntegrationClient;
 import com.flowledger.forecast.client.BankIntegrationClient.Balance;
 import com.flowledger.forecast.client.BankIntegrationClient.Transaction;
 import com.flowledger.forecast.client.CashManagementClient;
+import com.flowledger.forecast.client.SourceCaller;
 import com.flowledger.forecast.dto.ForecastRunResponse;
 import com.flowledger.forecast.dto.ForecastRunSummaryResponse;
 import com.flowledger.forecast.entity.DataQuality;
 import com.flowledger.forecast.entity.ForecastModelConfig;
 import com.flowledger.forecast.entity.ForecastRun;
 import com.flowledger.forecast.entity.PatternQuality;
+import com.flowledger.forecast.entity.TriggerType;
 import com.flowledger.forecast.exception.BalanceNotAvailableException;
 import com.flowledger.forecast.exception.ForecastRunNotFoundException;
 import com.flowledger.forecast.repository.ForecastDailyResultRepository;
@@ -86,6 +88,8 @@ public class ForecastService {
     static final Set<CompanyRole> FORECAST_ROLES =
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
 
+    // The nil UUID marks something created by the service itself, not by a user (as in migration V6).
+    static final UUID SYSTEM_ACTOR = new UUID(0, 0);
     private static final String MODEL_VERSION_PREFIX = "1:";
     private static final String PREVIOUS_YEAR_MODEL_VERSION_PREFIX = "2:";
 
@@ -138,7 +142,21 @@ public class ForecastService {
     public CreatedRun createRun(Jwt user, UUID companyId) {
         companyAccessVerifier.verify(user, companyId, FORECAST_ROLES);
         UUID actor = UUID.fromString(user.getSubject());
-        ForecastModelConfig config = activeConfig(companyId, actor);
+        return create(SourceCaller.user(user), companyId, actor, TriggerType.MANUAL);
+    }
+
+    /**
+     * The daily scheduled forecast for a company, made without a user: inputs come from the other
+     * services' internal APIs, and the run is SCHEDULED with no triggering user. The same rules and
+     * the same-inputs check apply, so a day whose inputs did not change gives no new run.
+     */
+    public CreatedRun createScheduledRun(UUID companyId) {
+        return create(SourceCaller.SERVICE, companyId, null, TriggerType.SCHEDULED);
+    }
+
+    // actor: the user, or null for the service itself (a configuration it creates is then by the nil UUID).
+    private CreatedRun create(SourceCaller caller, UUID companyId, UUID actor, TriggerType trigger) {
+        ForecastModelConfig config = activeConfig(companyId, actor == null ? SYSTEM_ACTOR : actor);
         ForecastParameters parameters = config.getParameters();
         boolean previousYear = PreviousYearPatternStrategy.CODE.equals(parameters.strategy());
         InflowForecastStrategy strategy = strategies.get(parameters.strategy());
@@ -147,8 +165,8 @@ public class ForecastService {
         }
 
         // Inputs, read before any transaction so no connection is held while other services answer.
-        UUID accountId = bankIntegrationClient.findActiveCurrentAccount(user, companyId);
-        Balance balance = bankIntegrationClient.findLatestBalance(user, companyId, accountId)
+        UUID accountId = bankIntegrationClient.findActiveCurrentAccount(caller, companyId);
+        Balance balance = bankIntegrationClient.findLatestBalance(caller, companyId, accountId)
                 .filter(found -> "LKR".equals(found.currency()))
                 .orElseThrow(BalanceNotAvailableException::new);
 
@@ -157,10 +175,10 @@ public class ForecastService {
         LocalDate balanceDate = LocalDate.ofInstant(balance.balanceAsOf(), clock.getZone());
         List<LocalDate> horizon = ForecastCalculator.horizon(balanceDate.plusDays(1));
 
-        List<StatementCoverage.Period> periods = importedPeriods(user, companyId, accountId);
+        List<StatementCoverage.Period> periods = importedPeriods(caller, companyId, accountId);
         Inflows inflows = previousYear
-                ? previousYearInflows(user, companyId, accountId, balanceDate, horizon, periods, parameters)
-                : weekdayInflows(user, companyId, accountId, balanceDate, horizon, periods, parameters, strategy);
+                ? previousYearInflows(caller, companyId, accountId, balanceDate, horizon, periods, parameters)
+                : weekdayInflows(caller, companyId, accountId, balanceDate, horizon, periods, parameters, strategy);
         List<ExpectedCheque> cheques = chequeProjection
                 .issuedCheques(companyId, accountId, horizon.getFirst(), horizon.getLast()).stream()
                 .sorted(Comparator.comparing(ExpectedCheque::expectedClearingDate)
@@ -188,7 +206,7 @@ public class ForecastService {
         ForecastRunStore.NewRun newRun = new ForecastRunStore.NewRun(companyId, config.getId(), accountId, asOf,
                 horizon.getFirst(), horizon.getLast(), balance.balanceAmount(), balance.balanceAsOf(), "LKR",
                 balanceAgeDays > parameters.balanceStaleAfterDays(), estimate.status(), quality, modelVersion,
-                config.snapshot(), inputHash, actor, clock.instant());
+                config.snapshot(), inputHash, trigger, actor, clock.instant());
 
         UUID createdId = writeTransaction.execute(status -> {
             Optional<UUID> runId = runStore.insertRun(newRun);
@@ -249,8 +267,8 @@ public class ForecastService {
         }
     }
 
-    List<StatementCoverage.Period> importedPeriods(Jwt user, UUID companyId, UUID accountId) {
-        return bankIntegrationClient.listStatementImports(user, companyId).stream()
+    List<StatementCoverage.Period> importedPeriods(SourceCaller caller, UUID companyId, UUID accountId) {
+        return bankIntegrationClient.listStatementImports(caller, companyId).stream()
                 .filter(batch -> batch.bankAccountId().equals(accountId) && batch.imported())
                 .map(batch -> new StatementCoverage.Period(batch.periodStart(), batch.periodEnd()))
                 .sorted(Comparator.comparing(StatementCoverage.Period::start).thenComparing(StatementCoverage.Period::end))
@@ -267,12 +285,12 @@ public class ForecastService {
     }
 
     // WEEKDAY_AVERAGE, unchanged: the lookback weeks of bank history before the balance date.
-    private Inflows weekdayInflows(Jwt user, UUID companyId, UUID accountId, LocalDate balanceDate,
+    private Inflows weekdayInflows(SourceCaller caller, UUID companyId, UUID accountId, LocalDate balanceDate,
                                    List<LocalDate> horizon, List<StatementCoverage.Period> periods,
                                    ForecastParameters parameters, InflowForecastStrategy strategy) {
         LocalDate historyFrom = balanceDate.minusWeeks(parameters.lookbackWeeks()).plusDays(1);
         List<Transaction> history = bankIntegrationClient.listTransactions(
-                user, companyId, accountId, historyFrom, balanceDate);
+                caller, companyId, accountId, historyFrom, balanceDate);
         Set<LocalDate> covered = StatementCoverage.coveredDates(periods, historyFrom, balanceDate);
         InflowEstimate estimate = strategy.estimate(
                 inflowHistory(historyFrom, balanceDate, covered, history), horizon, parameters);
@@ -286,7 +304,7 @@ public class ForecastService {
      * receipt (sale date plus lag) falls between the start of that previous-year range and the
      * balance date, so they serve days without statement coverage in both years.
      */
-    private Inflows previousYearInflows(Jwt user, UUID companyId, UUID accountId, LocalDate balanceDate,
+    private Inflows previousYearInflows(SourceCaller caller, UUID companyId, UUID accountId, LocalDate balanceDate,
                                         List<LocalDate> horizon, List<StatementCoverage.Period> periods,
                                         ForecastParameters parameters) {
         LocalDate windowFrom = PreviousYearPatternStrategy.growthWindowStart(balanceDate, parameters.lookbackWeeks());
@@ -296,10 +314,10 @@ public class ForecastService {
         int cardLag = parameters.cardReceiptLagDays();
 
         List<Transaction> transactions = new ArrayList<>(bankIntegrationClient.listTransactions(
-                user, companyId, accountId, windowFrom, balanceDate));
+                caller, companyId, accountId, windowFrom, balanceDate));
         transactions.addAll(bankIntegrationClient.listTransactions(
-                user, companyId, accountId, referenceFrom, referenceTo));
-        List<RecordedSale> sales = cashManagementClient.recordedSales(user, companyId,
+                caller, companyId, accountId, referenceFrom, referenceTo));
+        List<RecordedSale> sales = cashManagementClient.recordedSales(caller, companyId,
                 referenceFrom.minusDays(Math.max(cashLag, cardLag)), balanceDate.minusDays(Math.min(cashLag, cardLag)));
 
         Set<LocalDate> covered = StatementCoverage.coveredDates(periods, referenceFrom, balanceDate);

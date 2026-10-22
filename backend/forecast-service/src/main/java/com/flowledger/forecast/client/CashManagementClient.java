@@ -6,7 +6,7 @@ import com.flowledger.forecast.exception.SalesHistoryUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
-import org.springframework.security.oauth2.jwt.Jwt;
+import com.flowledger.forecast.config.CashManagementProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -20,7 +20,8 @@ import java.util.UUID;
 
 /**
  * Reads recorded sales from cash-management-service, which owns sales and their imports, with the
- * user's own token: approved import rows (including days approved with zero sales) and daily sales
+ * user's own token (or, for the daily scheduled forecast, from the internal API with the internal
+ * API key): approved import rows (including days approved with zero sales) and daily sales
  * entered by hand. Any failure or answer that breaks the contract is refused (503), never replaced
  * by an empty history.
  */
@@ -29,20 +30,38 @@ import java.util.UUID;
 public class CashManagementClient {
 
     private static final String HISTORY_PATH = "/api/v1/cash-management/companies/{companyId}/sales-history";
+    private static final String INTERNAL_HISTORY_PATH = "/internal/v1/cash-management/companies/{companyId}/sales-history";
 
     private final RestClient restClient;
+    private final String internalApiSecret;
 
-    public CashManagementClient(@Qualifier("cashManagementRestClient") RestClient restClient) {
+    public CashManagementClient(@Qualifier("cashManagementRestClient") RestClient restClient,
+                                CashManagementProperties properties) {
         this.restClient = restClient;
+        this.internalApiSecret = properties.internalApiSecret();
+    }
+
+    // A user's own token on the public API; the internal API key for the service itself.
+    private void authorize(HttpHeaders headers, SourceCaller caller) {
+        if (!caller.isService()) {
+            headers.set(HttpHeaders.AUTHORIZATION, caller.bearer());
+            return;
+        }
+        if (internalApiSecret == null || internalApiSecret.isBlank()) {
+            log.warn("CASH_MANAGEMENT_INTERNAL_API_SECRET is not set; sales history cannot be read without a user");
+            throw new SalesHistoryUnavailableException();
+        }
+        headers.set(BankIntegrationClient.INTERNAL_KEY_HEADER, internalApiSecret);
     }
 
     /** Recorded sales with a sale date between from and to, inclusive, one per date. */
-    public List<RecordedSale> recordedSales(Jwt user, UUID companyId, LocalDate from, LocalDate to) {
+    public List<RecordedSale> recordedSales(SourceCaller caller, UUID companyId, LocalDate from, LocalDate to) {
         History history;
         try {
             history = restClient.get()
-                    .uri(uri -> uri.path(HISTORY_PATH).queryParam("from", from).queryParam("to", to).build(companyId))
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + user.getTokenValue())
+                    .uri(uri -> uri.path(caller.isService() ? INTERNAL_HISTORY_PATH : HISTORY_PATH)
+                            .queryParam("from", from).queryParam("to", to).build(companyId))
+                    .headers(headers -> authorize(headers, caller))
                     .retrieve()
                     .body(History.class);
         } catch (RestClientException e) {

@@ -7,7 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
-import org.springframework.security.oauth2.jwt.Jwt;
+import com.flowledger.forecast.config.BankIntegrationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -23,26 +23,32 @@ import java.util.function.Supplier;
 
 /**
  * Reads forecast inputs from bank-integration-service, which owns bank accounts, balances,
- * statements and transactions. The user's own token is forwarded, so bank-integration-service
- * applies its own authorization. Any failure or incomplete answer is refused (503), never
- * replaced by empty or zero data.
+ * statements and transactions. For a user, their own token is forwarded to the public API, so
+ * bank-integration-service applies its own authorization; the daily scheduled forecast reads the
+ * same data from the internal API with the internal API key. Any failure or incomplete answer is
+ * refused (503), never replaced by empty or zero data.
  */
 @Slf4j
 @Component
 public class BankIntegrationClient {
 
     private static final String COMPANY_PATH = "/api/v1/bank-integration/companies/{companyId}";
+    private static final String INTERNAL_PATH = "/internal/v1/bank-integration/companies/{companyId}";
+    static final String INTERNAL_KEY_HEADER = "X-Internal-Api-Key";
 
     private final RestClient restClient;
+    private final String internalApiSecret;
 
-    public BankIntegrationClient(@Qualifier("bankIntegrationRestClient") RestClient restClient) {
+    public BankIntegrationClient(@Qualifier("bankIntegrationRestClient") RestClient restClient,
+                                 BankIntegrationProperties properties) {
         this.restClient = restClient;
+        this.internalApiSecret = properties.internalApiSecret();
     }
 
-    public UUID findActiveCurrentAccount(Jwt user, UUID companyId) {
+    public UUID findActiveCurrentAccount(SourceCaller caller, UUID companyId) {
         List<BankAccount> accounts = call("Bank account lookup", () -> restClient.get()
-                .uri(COMPANY_PATH + "/bank-accounts", companyId)
-                .header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .uri(path(caller) + "/bank-accounts", companyId)
+                .headers(headers -> authorize(headers, caller))
                 .retrieve()
                 .body(new ParameterizedTypeReference<List<BankAccount>>() {
                 }));
@@ -55,12 +61,12 @@ public class BankIntegrationClient {
     }
 
     // Empty when the account has no confirmed balance yet (404 from bank-integration-service).
-    public Optional<Balance> findLatestBalance(Jwt user, UUID companyId, UUID bankAccountId) {
+    public Optional<Balance> findLatestBalance(SourceCaller caller, UUID companyId, UUID bankAccountId) {
         try {
             Balance balance = call("Balance lookup", () -> restClient.get()
-                    .uri(COMPANY_PATH + "/bank-accounts/{bankAccountId}/balance-snapshots/latest",
+                    .uri(path(caller) + "/bank-accounts/{bankAccountId}/balance-snapshots/latest",
                             companyId, bankAccountId)
-                    .header(HttpHeaders.AUTHORIZATION, bearer(user))
+                    .headers(headers -> authorize(headers, caller))
                     .retrieve()
                     .body(Balance.class));
             if (balance.balanceAmount() == null || balance.balanceAsOf() == null || balance.currency() == null) {
@@ -73,10 +79,10 @@ public class BankIntegrationClient {
         }
     }
 
-    public List<StatementImport> listStatementImports(Jwt user, UUID companyId) {
+    public List<StatementImport> listStatementImports(SourceCaller caller, UUID companyId) {
         List<StatementImport> imports = call("Statement import lookup", () -> restClient.get()
-                .uri(COMPANY_PATH + "/statement-imports", companyId)
-                .header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .uri(path(caller) + "/statement-imports", companyId)
+                .headers(headers -> authorize(headers, caller))
                 .retrieve()
                 .body(new ParameterizedTypeReference<List<StatementImport>>() {
                 }));
@@ -87,15 +93,15 @@ public class BankIntegrationClient {
         return imports;
     }
 
-    public List<Transaction> listTransactions(Jwt user, UUID companyId, UUID bankAccountId,
+    public List<Transaction> listTransactions(SourceCaller caller, UUID companyId, UUID bankAccountId,
                                               LocalDate from, LocalDate to) {
         List<Transaction> transactions = call("Transaction lookup", () -> restClient.get()
-                .uri(uri -> uri.path(COMPANY_PATH + "/bank-transactions")
+                .uri(uri -> uri.path(path(caller) + "/bank-transactions")
                         .queryParam("bankAccountId", bankAccountId)
                         .queryParam("from", from)
                         .queryParam("to", to)
                         .build(companyId))
-                .header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .headers(headers -> authorize(headers, caller))
                 .retrieve()
                 .body(new ParameterizedTypeReference<List<Transaction>>() {
                 }));
@@ -128,8 +134,21 @@ public class BankIntegrationClient {
         return body;
     }
 
-    private static String bearer(Jwt user) {
-        return "Bearer " + user.getTokenValue();
+    private static String path(SourceCaller caller) {
+        return caller.isService() ? INTERNAL_PATH : COMPANY_PATH;
+    }
+
+    // A user's own token on the public API; the internal API key for the service itself.
+    private void authorize(HttpHeaders headers, SourceCaller caller) {
+        if (!caller.isService()) {
+            headers.set(HttpHeaders.AUTHORIZATION, caller.bearer());
+            return;
+        }
+        if (internalApiSecret == null || internalApiSecret.isBlank()) {
+            log.warn("BANK_INTEGRATION_INTERNAL_API_SECRET is not set; bank data cannot be read without a user");
+            throw new BankIntegrationUnavailableException();
+        }
+        headers.set(INTERNAL_KEY_HEADER, internalApiSecret);
     }
 
     // Only the fields needed here; the rest of each response is ignored.

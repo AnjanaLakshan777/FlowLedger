@@ -28,6 +28,11 @@ import java.util.stream.Collectors;
 public final class FakeSourceServices {
 
     private static final FakeSourceServices INSTANCE = new FakeSourceServices();
+    private static final String INTERNAL_KEY_HEADER = "X-Internal-Api-Key";
+    private static final String BANK_INTEGRATION_KEY = "bank-integration-test-internal-key-0123456789abcdef";
+    private static final String CASH_MANAGEMENT_KEY = "cash-management-test-internal-key-0123456789abcdef";
+    // Never configured as a reply path, so a wrong key gets the 401 configured in reset().
+    private static final String UNAUTHORIZED = "/unauthorized";
 
     private final HttpServer server;
     private final Map<String, Reply> replies = new ConcurrentHashMap<>();
@@ -63,6 +68,7 @@ public final class FakeSourceServices {
 
     public void reset() {
         replies.clear();
+        replies.put(UNAUTHORIZED, new Reply(401, "{\"detail\": \"Invalid service credentials.\"}", Duration.ZERO));
         requests.clear();
         lastAuthorization = null;
         onRequest = () -> { };
@@ -176,7 +182,8 @@ public final class FakeSourceServices {
         String path = exchange.getRequestURI().getPath();
         String query = exchange.getRequestURI().getRawQuery();
         requests.add(query == null ? path : path + "?" + query);
-        Reply reply = replies.getOrDefault(path, new Reply(404, "{}", Duration.ZERO));
+        Reply reply = replies.getOrDefault(publicPath(path, exchange.getRequestHeaders().getFirst(INTERNAL_KEY_HEADER)),
+                new Reply(404, "{}", Duration.ZERO));
 
         try {
             onRequest.run();
@@ -192,6 +199,22 @@ public final class FakeSourceServices {
         } finally {
             exchange.close();
         }
+    }
+
+    /**
+     * The internal API answers like the public one, from the same replies, but only with the right
+     * internal API key (the test keys in config/application.properties); otherwise 401.
+     */
+    private static String publicPath(String path, String internalKey) {
+        if (!path.startsWith("/internal/v1/")) {
+            return path;
+        }
+        String expected = path.startsWith("/internal/v1/bank-integration/") ? BANK_INTEGRATION_KEY : CASH_MANAGEMENT_KEY;
+        return expected.equals(internalKey) ? "/api/v1/" + path.substring("/internal/v1/".length()) : UNAUTHORIZED;
+    }
+
+    public static boolean isInternal(String request) {
+        return request.startsWith("/internal/v1/");
     }
 
     public static String queryOf(String request) {

@@ -4,6 +4,7 @@ import com.flowledger.forecast.calculation.InflowEstimateStatus;
 import com.flowledger.forecast.calculation.StatementCoverage;
 import com.flowledger.forecast.client.BankIntegrationClient;
 import com.flowledger.forecast.client.BankIntegrationClient.Transaction;
+import com.flowledger.forecast.client.SourceCaller;
 import com.flowledger.forecast.dto.ForecastVsActualResponse;
 import com.flowledger.forecast.dto.ForecastVsActualResponse.Day;
 import com.flowledger.forecast.dto.ForecastVsActualResponse.Totals;
@@ -76,6 +77,7 @@ public class ForecastVsActualService {
 
     public ForecastVsActualResponse compare(Jwt user, UUID companyId, UUID runId) {
         companyAccessVerifier.verify(user, companyId, FORECAST_ROLES);
+        SourceCaller caller = SourceCaller.user(user);
         SavedRun saved = readTransaction.execute(status -> {
             ForecastRun run = runRepository.findByCompanyIdAndId(companyId, runId)
                     .orElseThrow(ForecastRunNotFoundException::new);
@@ -93,10 +95,10 @@ public class ForecastVsActualService {
         boolean started = !end.isBefore(start);
         Set<LocalDate> covered = started
                 ? StatementCoverage.coveredDates(
-                        forecastService.importedPeriods(user, companyId, run.getBankAccountId()), start, end)
+                        forecastService.importedPeriods(caller, companyId, run.getBankAccountId()), start, end)
                 : Set.of();
         Map<LocalDate, List<Transaction>> byDate = started
-                ? bankIntegrationClient.listTransactions(user, companyId, run.getBankAccountId(), start, end).stream()
+                ? bankIntegrationClient.listTransactions(caller, companyId, run.getBankAccountId(), start, end).stream()
                         .collect(Collectors.groupingBy(Transaction::transactionDate))
                 : Map.of();
 
