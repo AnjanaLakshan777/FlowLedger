@@ -93,7 +93,7 @@ export default function ForecastVsActualPage() {
   const chartData = rows.map((r) => ({ week: r.week_start, forecast: m.f(r), actual: m.a(r) }))
   const series = metric === "closing" ? [SERIES[0], { ...SERIES[1], label: "Actual Bank Balance" }] : [...SERIES]
   const diff = (v: number | null) => <span className={cn(v != null && v < 0 && "text-destructive")}>{fmt.signed(v)}</span>
-  const period = live ? "Periods starting" : "Weeks starting"
+  const period = "Weeks starting"
 
   const header = <PageHeader title="Forecast vs Actual" description="How close earlier forecasts were to what the bank actually confirmed. Forecast figures are marked F, bank-confirmed actuals A." />
   if (live && (runsNotReady || !runs.length)) {
@@ -164,13 +164,13 @@ export default function ForecastVsActualPage() {
       <StatRow items={[
         { label: "Expected receipts", value: fmt.compact(fi) }, { label: "Confirmed receipts", value: fmt.compact(ai) }, { label: "Receipts difference", value: pct(ai, fi) },
         { label: "Expected cheque outflows", value: fmt.compact(fo) }, { label: "Confirmed payments", value: fmt.compact(ao) }, { label: "Payments difference", value: pct(ao, fo) },
-        { label: live ? "Periods" : "Weeks", value: rows.length },
+        { label: "Weeks", value: rows.length },
       ]} />
       <Card>
         <CardHeader>
-          <CardTitle>{m.label} by {live ? "period" : "week"}</CardTitle>
+          <CardTitle>{m.label} by week</CardTitle>
           <CardDescription>{live
-            ? `7-day periods from the forecast start; only days with imported bank transactions, up to the end of last month${comparison.data?.comparedThrough ? `, up to ${fmt.date(comparison.data.comparedThrough)}` : ""}`
+            ? `Weeks from Monday to Sunday; only days with imported bank transactions, up to the end of last month${comparison.data?.comparedThrough ? `, up to ${fmt.date(comparison.data.comparedThrough)}` : ""}`
             : "Forecast made at the start of each week vs. bank-confirmed actual"}</CardDescription>
           <CardAction>
             <Segmented value={metric} onChange={setMetric} options={[{ value: "closing", label: "Closing balance" }, { value: "in", label: "Receipts" }, { value: "out", label: "Cheque outflows" }]} />
@@ -179,12 +179,12 @@ export default function ForecastVsActualPage() {
         <CardContent className="grid gap-2">
           <Legend items={series.map((s) => ({ label: s.label, color: s.color }))} />
           {rows.length
-            ? <GroupedBarChart data={chartData} xKey="week" xFormat={fmt.axisDate} series={series} title={(r) => (live ? "Period from " : "Week of ") + fmt.day(r.week)} height={240} />
+            ? <GroupedBarChart data={chartData} xKey="week" xFormat={fmt.axisDate} series={series} title={(r) => "Week of " + fmt.day(r.week)} height={240} />
             : <p className="text-muted-foreground py-10 text-center text-sm">No bank-confirmed days to compare yet.</p>}
         </CardContent>
       </Card>
       <Card>
-        <CardHeader><CardTitle>{live ? "Comparison by period" : "Weekly comparison"}</CardTitle><CardDescription>Difference = actual − forecast. Amounts in LKR.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Weekly comparison</CardTitle><CardDescription>Difference = actual − forecast. Amounts in LKR.</CardDescription></CardHeader>
         <DataTable<ForecastVsActual>
           rows={rows}
           rowKey={(r) => r.week_start}
@@ -192,7 +192,7 @@ export default function ForecastVsActualPage() {
           maxHeight="none"
           empty={live ? "No days of this forecast have imported bank transactions yet." : "No weeks in this date range."}
           columns={[
-            { key: "week", header: "Period", sortValue: (r) => r.week_start, cell: (r) => <CellStack className="whitespace-nowrap" main={<b className="font-semibold">{fmt.range(r.week_start, r.week_end)}</b>} sub={r.days_compared != null && r.days_compared < 7 ? `${r.days_compared} of 7 days confirmed` : undefined} /> },
+            { key: "week", header: "Week (Mon–Sun)", sortValue: (r) => r.week_start, cell: (r) => <CellStack className="whitespace-nowrap" main={<b className="font-semibold">{fmt.range(r.week_start, r.week_end)}</b>} sub={r.days_compared != null && r.days_compared < 7 ? `${r.days_compared} of 7 days confirmed` : undefined} /> },
             { key: "fi", header: <>Expected receipts{F}</>, numeric: true, sortValue: (r) => r.forecast_in ?? 0, cell: (r) => <span className="text-muted-foreground">{r.forecast_in == null ? "Not estimated" : fmt.amt(r.forecast_in)}</span> },
             { key: "ai", header: <>Confirmed receipts{A}</>, numeric: true, sortValue: (r) => r.actual_in, cell: (r) => <CellStack main={<b className="font-semibold">{fmt.amt(r.actual_in)}</b>} sub={diff(r.diff_in)} /> },
             { key: "fo", header: <>Expected cheque outflows{F}</>, numeric: true, sortValue: (r) => r.forecast_out, cell: (r) => <span className="text-muted-foreground">{fmt.amt(r.forecast_out)}</span> },

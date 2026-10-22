@@ -1674,7 +1674,10 @@ retry; the frontend never falls back to demonstration data.
   baseline-run rule is open. By default it is the newest run that started
   by the end of last month (only ended months have imported transactions);
   later runs are listed as "nothing to compare yet", and the screen says up
-  to which date it compares.
+  to which date it compares. It groups the days by calendar week, Monday to
+  Sunday (2026-10-22; before, 7-day periods from the forecast start); a week
+  at either end of the forecast holds only the forecast's own days, and a
+  week with fewer than 7 compared days says how many it has.
 - Historical Sales Import is live: template download, CSV upload with the
   server's validation results, issues and all-rows preview, import history,
   and approval or rejection for Finance Controllers and Company Admins. Actions follow the

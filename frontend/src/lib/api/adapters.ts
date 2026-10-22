@@ -1,7 +1,8 @@
 import type {
   BankAccount, BankTransaction, Cheque, ChequeCategory, DailySale, ForecastDay, ForecastPayment, ForecastVsActual, ForecastWeek, Shortage,
 } from "@/data/types"
-import { daysBetween } from "@/lib/format"
+import { weekStart } from "@/lib/calendar"
+import { addDays, daysBetween } from "@/lib/format"
 import type {
   ApiBalance, ApiBankAccount, ApiCheque, ApiChequeCategory, ApiDailySale, ApiStatementImport, ApiTransaction, ChequeRequest, ForecastRun,
   ForecastVsActual as ApiForecastVsActual, TransactionCategory,
@@ -183,11 +184,18 @@ export function forecastShortages(days: ForecastDay[]): Shortage[] {
   return shortages
 }
 
-/** Forecast vs Actual by 7-day period from the run's start; only days with bank-confirmed actuals count. */
+/**
+ * Forecast vs Actual by calendar week, Monday to Sunday; only days with bank-confirmed actuals count. A week at either
+ * end of the forecast holds only the forecast's own days, shown by `days_compared`.
+ */
 export function forecastVsActualWeeks(fva: ApiForecastVsActual): ForecastVsActual[] {
+  const weeks = new Map<string, ApiForecastVsActual["days"]>()
+  for (const d of fva.days) {
+    const monday = weekStart(d.date)
+    weeks.set(monday, [...(weeks.get(monday) ?? []), d])
+  }
   const rows: ForecastVsActual[] = []
-  for (let i = 0; i < fva.days.length; i += 7) {
-    const block = fva.days.slice(i, i + 7)
+  for (const [monday, block] of [...weeks].sort(([a], [b]) => a.localeCompare(b))) {
     const compared = block.filter((d) => d.actualsAvailable)
     if (!compared.length) continue
     const last = compared[compared.length - 1]
@@ -196,7 +204,7 @@ export function forecastVsActualWeeks(fva: ApiForecastVsActual): ForecastVsActua
     const forecastOut = round(compared.reduce((t, d) => t + d.forecastChequeOutflows, 0))
     const actualOut = round(compared.reduce((t, d) => t + (d.actualChequeOutflows ?? 0), 0))
     rows.push({
-      week_start: block[0].date, week_end: block[block.length - 1].date,
+      week_start: monday, week_end: addDays(monday, 6),
       forecast_in: forecastIn, actual_in: actualIn, diff_in: forecastIn == null ? null : round(actualIn - forecastIn),
       forecast_out: forecastOut, actual_out: actualOut, diff_out: round(actualOut - forecastOut),
       forecast_closing: last.forecastClosingBalance, actual_closing: last.actualClosingBalance,

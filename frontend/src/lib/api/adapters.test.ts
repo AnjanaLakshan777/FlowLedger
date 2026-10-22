@@ -113,17 +113,22 @@ describe("forecast vs actual", () => {
     })),
   }
 
-  it("compares only days with bank-confirmed actuals, in 7-day periods from the forecast start", () => {
+  it("compares only days with bank-confirmed actuals, by calendar week from Monday to Sunday", () => {
+    // The forecast starts on Thursday 1 October; actuals cover 1 to 5 October.
     const rows = forecastVsActualWeeks(fva)
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({
-      week_start: "2026-10-01", week_end: "2026-10-07", days_compared: 5, forecast_in: 500, actual_in: 750, diff_in: 250,
-      forecast_out: 1500, actual_out: 1500, diff_out: 0, forecast_closing: 1004, actual_closing: 1104, diff_closing: 100,
+      week_start: "2026-09-28", week_end: "2026-10-04", days_compared: 4, forecast_in: 400, actual_in: 600, diff_in: 200,
+      forecast_out: 1500, actual_out: 1500, diff_out: 0, forecast_closing: 1003, actual_closing: 1103, diff_closing: 100,
+    })
+    expect(rows[1]).toMatchObject({
+      week_start: "2026-10-05", week_end: "2026-10-11", days_compared: 1, forecast_in: 100, actual_in: 150,
+      forecast_closing: 1004, actual_closing: 1104,
     })
   })
 
   it("keeps receipts unknown when the forecast did not estimate them", () => {
     const rows = forecastVsActualWeeks({ ...fva, days: fva.days.map((d) => ({ ...d, forecastSalesInflows: null })) })
-    expect(rows[0]).toMatchObject({ forecast_in: null, diff_in: null, actual_in: 750 })
+    expect(rows[0]).toMatchObject({ forecast_in: null, diff_in: null, actual_in: 600 })
   })
 })
