@@ -113,7 +113,8 @@ class StatementRemovalAndOtherCategoryIntegrationTest {
     void shouldLetOnlyImportingRolesRemoveAndOnlyInTheirCompany() throws Exception {
         UUID batch = upload();
         identityService.reset();
-        identityService.grant(companyId, "ACCOUNTANT");
+        // Accountants enter the monthly bank transactions, so they may remove an import too; Cashiers may not.
+        identityService.grant(companyId, "CASHIER");
         remove(batch).andExpect(status().isForbidden());
 
         UUID otherCompany = UUID.randomUUID();

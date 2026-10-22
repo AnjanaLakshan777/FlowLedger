@@ -104,7 +104,7 @@ describe("records", () => {
 
 describe("forecast vs actual", () => {
   const fva: ForecastVsActual = {
-    forecastRunId: "run-1", horizonStartDate: "2026-10-01", horizonEndDate: "2026-12-23", inflowEstimateStatus: "ESTIMATED", comparedThrough: "2026-10-05",
+    forecastRunId: "run-1", horizonStartDate: "2026-10-01", horizonEndDate: "2026-12-23", inflowEstimateStatus: "ESTIMATED", actualsThrough: "2026-10-31", comparedThrough: "2026-10-05",
     warnings: [], totals: { daysCompared: 5, unclassifiedTransactionCount: 1, unclassifiedTransactionAmount: 100 },
     days: dates("2026-10-01", 84).map((d, i) => ({
       date: d, actualsAvailable: i < 5, forecastSalesInflows: 100, actualSalesInflows: i < 5 ? 150 : null, forecastChequeOutflows: i === 2 ? 1500 : 0,

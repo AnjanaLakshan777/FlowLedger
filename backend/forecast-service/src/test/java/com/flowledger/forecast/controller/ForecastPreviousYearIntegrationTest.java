@@ -311,10 +311,12 @@ class ForecastPreviousYearIntegrationTest {
         sources.transactions(companyId, List.of(
                 transaction(accountId, LocalDate.of(2026, 10, 15), "CREDIT", "700.00", "CASH_SALES_DEPOSIT")));
 
+        // The run starts in the current month (15 October), whose bank transactions are imported after it ends.
         mockMvc.perform(get(runsUrl() + "/" + runId + "/forecast-vs-actual").with(user()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.days[0].forecastSalesInflows").value(3300.0))
-                .andExpect(jsonPath("$.days[0].actualSalesInflows").value(700.0));
+                .andExpect(jsonPath("$.days[0].actualsAvailable").value(false))
+                .andExpect(jsonPath("$.days[0].actualSalesInflows").value(nullValue()));
         assertThat(sources.requests()).noneMatch(r -> r.startsWith(FakeSourceServices.salesHistoryPath(companyId)));
     }
 

@@ -3,7 +3,7 @@ package com.flowledger.forecast.controller;
 import com.flowledger.forecast.support.FakeIdentityServer;
 import com.flowledger.forecast.support.ForecastConfigs;
 import com.flowledger.forecast.support.FakeSourceServices;
-import com.flowledger.forecast.support.FixedClockConfig;
+import com.flowledger.forecast.support.NextMonthClockConfig;
 import com.flowledger.forecast.support.ProjectedCheques;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,11 +44,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * A forecast made from the balance of 30 September 2026 compared with October's actual bank
- * transactions. "Today" is 15 October 2026. Needs the local forecast PostgreSQL database.
+ * transactions. "Today" is 15 November 2026, so October is the last ended month and November has
+ * no actuals yet. Statements cover days up to 14 October. Needs the local forecast PostgreSQL database.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(FixedClockConfig.class)
+@Import(NextMonthClockConfig.class)
 @Transactional
 class ForecastVsActualIntegrationTest {
 
@@ -111,6 +112,7 @@ class ForecastVsActualIntegrationTest {
                 .andExpect(jsonPath("$.forecastRunId").value(runId))
                 .andExpect(jsonPath("$.horizonStartDate").value("2026-10-01"))
                 .andExpect(jsonPath("$.horizonEndDate").value("2026-12-23"))
+                .andExpect(jsonPath("$.actualsThrough").value("2026-10-31"))
                 .andExpect(jsonPath("$.comparedThrough").value("2026-10-14"))
                 .andExpect(jsonPath("$.days", hasSize(84)))
                 // Monday 5 October: forecast 100000 cash, actually 120000.
@@ -135,7 +137,7 @@ class ForecastVsActualIntegrationTest {
                 .andExpect(jsonPath("$.days[13].forecastClosingBalance").value(600000.0))
                 .andExpect(jsonPath("$.days[13].actualClosingBalance").value(559000.0))
                 .andExpect(jsonPath("$.days[13].closingBalanceDifference").value(-41000.0))
-                // Today and later: not in any statement yet, so unknown rather than zero.
+                // Not in any statement yet, so unknown rather than zero.
                 .andExpect(jsonPath("$.days[14].date").value("2026-10-15"))
                 .andExpect(jsonPath("$.days[14].actualsAvailable").value(false))
                 .andExpect(jsonPath("$.days[14].actualSalesInflows").value(nullValue()))
@@ -150,13 +152,34 @@ class ForecastVsActualIntegrationTest {
                 .andExpect(jsonPath("$.totals.actualChequeOutflows").value(200000.0))
                 .andExpect(jsonPath("$.totals.unclassifiedTransactionCount").value(1))
                 .andExpect(jsonPath("$.totals.unclassifiedTransactionAmount").value(1000.0))
-                .andExpect(jsonPath("$.warnings[*].code").value(contains("INCOMPLETE_CLASSIFICATION")));
+                // 15 to 31 October have no statement yet.
+                .andExpect(jsonPath("$.warnings[*].code").value(contains("ACTUALS_INCOMPLETE", "INCOMPLETE_CLASSIFICATION")))
+                .andExpect(jsonPath("$.warnings[0].message").value(
+                        "17 day(s) up to the end of last month have no imported bank transactions and no actual values."));
 
+        // Only up to the end of last month: November's transactions are imported after it ends.
         Map<String, String> query = FakeSourceServices.params(sources.requests().stream()
                 .filter(request -> request.startsWith(FakeSourceServices.transactionsPath(companyId)))
                 .reduce((first, last) -> last).orElseThrow());
-        assertThat(query).containsEntry("from", "2026-10-01").containsEntry("to", "2026-10-15")
+        assertThat(query).containsEntry("from", "2026-10-01").containsEntry("to", "2026-10-31")
                 .containsEntry("bankAccountId", accountId.toString());
+    }
+
+    @Test
+    void shouldNeverCompareTheCurrentMonth() throws Exception {
+        String runId = createRun();
+        // Even if November statements were already imported, November is not compared yet.
+        sources.statements(companyId, accountId, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 11, 14));
+        sources.transactions(companyId, List.of(
+                transaction(accountId, LocalDate.of(2026, 11, 2), "CREDIT", "120000.00", "CASH_SALES_DEPOSIT")));
+
+        compare(runId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.comparedThrough").value("2026-10-31"))
+                .andExpect(jsonPath("$.days[31].date").value("2026-11-01"))
+                .andExpect(jsonPath("$.days[31].actualsAvailable").value(false))
+                .andExpect(jsonPath("$.days[32].actualSalesInflows").value(nullValue()))
+                .andExpect(jsonPath("$.totals.daysCompared").value(31));
     }
 
     // A day without an imported statement has no actuals, and the actual balance cannot be
@@ -182,8 +205,9 @@ class ForecastVsActualIntegrationTest {
                 .andExpect(jsonPath("$.days[11].actualClosingBalance").value(nullValue()))
                 .andExpect(jsonPath("$.totals.daysCompared").value(13))
                 .andExpect(jsonPath("$.warnings[0].code").value("ACTUALS_INCOMPLETE"))
+                // 11 October, and 15 to 31 October.
                 .andExpect(jsonPath("$.warnings[0].message").value(
-                        "1 past day(s) are not covered by an imported bank statement and have no actual values."));
+                        "18 day(s) up to the end of last month have no imported bank transactions and no actual values."));
     }
 
     @Test
@@ -206,8 +230,9 @@ class ForecastVsActualIntegrationTest {
     }
 
     @Test
-    void shouldHaveNoActualsBeforeTheHorizonHasPassed() throws Exception {
-        sources.balance(companyId, accountId, "500000.00", "2026-10-14T18:29:59Z");
+    void shouldHaveNoActualsForAForecastStartingThisMonth() throws Exception {
+        // From the balance of 31 October: the horizon starts on 1 November, in the current month.
+        sources.balance(companyId, accountId, "500000.00", "2026-10-31T18:29:59Z");
         String runId = createRun();
         int requestsBefore = sources.requests().size();
 
@@ -218,7 +243,8 @@ class ForecastVsActualIntegrationTest {
                 .andExpect(jsonPath("$.totals.daysCompared").value(0))
                 .andExpect(jsonPath("$.warnings", empty()));
 
-        assertThat(sources.requests().size() - requestsBefore).isEqualTo(2);
+        // Nothing can be compared yet, so no bank data is fetched.
+        assertThat(sources.requests().size() - requestsBefore).isZero();
     }
 
     @Test

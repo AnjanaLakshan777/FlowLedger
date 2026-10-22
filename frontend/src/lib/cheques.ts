@@ -1,4 +1,4 @@
-import type { Cheque, ChequeCategory } from "@/data/types"
+import type { BankTransaction, Cheque, ChequeCategory } from "@/data/types"
 import { parseDate } from "./format"
 
 export const CHEQUE_CATEGORIES: ChequeCategory[] = ["Supplier Payment", "Salary", "Tax", "Other Expenses"]
@@ -20,12 +20,32 @@ const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(
 /** A scheduled cheque whose expected clearing date is after `today`: a future outflow, and the only kind that can be edited. */
 export const isUpcoming = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date > today
 /**
- * A scheduled cheque on or past its expected clearing date. It is NOT assumed paid: FlowLedger has no bank reconciliation yet,
- * so it stays Scheduled and is shown as past its clearing date.
+ * A scheduled cheque on or past its expected clearing date. It is NOT assumed paid: it is shown as cleared only when an imported
+ * bank transaction confirms it (see `clearings`); until then it is shown as past its clearing date.
  */
 export const isPastClearingDate = (c: Cheque, today: string) => c.status === "Scheduled" && c.expected_clear_date <= today
-/** Status shown for a cheque. */
-export const paymentState = (c: Cheque, today: string) => (c.status !== "Scheduled" ? c.status : isPastClearingDate(c, today) ? "Past clearing date" : "Scheduled")
+/** A cheque payment the bank confirmed: the imported CHEQUE_PAYMENT debit with the cheque's number. */
+export interface Clearing { date: string; amount: number }
+
+/** Bank statements may print cheque numbers with leading zeros. */
+const chequeKey = (no: string) => no.replace(/^0+/, "") || "0"
+
+/** Cleared cheques by number, from imported bank transactions classified as cheque payments. */
+export function clearings(transactions: BankTransaction[]): Map<string, Clearing> {
+  const map = new Map<string, Clearing>()
+  for (const t of transactions) {
+    if (t.category !== "CHEQUE_PAYMENT" || !t.cheque_no || t.amount >= 0) continue
+    const key = chequeKey(t.cheque_no)
+    if (!map.has(key) || t.txn_date < map.get(key)!.date) map.set(key, { date: t.txn_date, amount: -t.amount })
+  }
+  return map
+}
+
+export const clearingOf = (c: Cheque, cleared: Map<string, Clearing>) => (c.status === "Scheduled" ? cleared.get(chequeKey(c.cheque_no)) : undefined)
+
+/** Status shown for a cheque: Cleared once the bank's imported transactions show it paid. */
+export const paymentState = (c: Cheque, today: string, cleared?: Map<string, Clearing>) =>
+  c.status !== "Scheduled" ? c.status : cleared && clearingOf(c, cleared) ? "Cleared" : isPastClearingDate(c, today) ? "Past clearing date" : "Scheduled"
 
 /**
  * Validates a cheque before saving. `originalNo` is the cheque being edited, so it doesn't count as its own duplicate.

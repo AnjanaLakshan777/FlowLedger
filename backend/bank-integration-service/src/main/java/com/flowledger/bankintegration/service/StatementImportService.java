@@ -13,6 +13,8 @@ import com.flowledger.bankintegration.entity.TransactionCategory;
 import com.flowledger.bankintegration.exception.BankAccountNotActiveException;
 import com.flowledger.bankintegration.exception.BankAccountNotFoundException;
 import com.flowledger.bankintegration.exception.ConnectionModeMismatchException;
+import com.flowledger.bankintegration.exception.InvalidRequestException;
+import com.flowledger.bankintegration.exception.MonthAlreadyImportedException;
 import com.flowledger.bankintegration.exception.StatementImportAlreadyRemovedException;
 import com.flowledger.bankintegration.exception.StatementImportNotFoundException;
 import com.flowledger.bankintegration.exception.StatementRejectedException;
@@ -23,7 +25,9 @@ import com.flowledger.bankintegration.repository.OutboxEventRepository;
 import com.flowledger.bankintegration.repository.StatementImportStore;
 import com.flowledger.bankintegration.security.CompanyAccessVerifier;
 import com.flowledger.bankintegration.security.CompanyRole;
+import com.flowledger.bankintegration.statement.MonthlyTemplateCsvParser;
 import com.flowledger.bankintegration.statement.ParsedStatement;
+import com.flowledger.bankintegration.statement.StatementError;
 import com.flowledger.bankintegration.statement.StatementLine;
 import com.flowledger.bankintegration.statement.StatementUpload;
 import com.flowledger.bankintegration.statement.TransactionDetailsCsvParser;
@@ -35,9 +39,14 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.YearMonth;
+import java.time.format.DateTimeParseException;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,6 +70,10 @@ public class StatementImportService {
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER);
     private static final Set<CompanyRole> VIEW_ROLES =
             EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
+    // The Accountant enters each month's bank transactions from the template, and so may the roles above;
+    // whoever may upload a month may also remove an import made by mistake.
+    private static final Set<CompanyRole> MONTHLY_ROLES =
+            EnumSet.of(CompanyRole.COMPANY_ADMIN, CompanyRole.FINANCE_CONTROLLER, CompanyRole.ACCOUNTANT);
 
     private static final String BATCH_ENTITY = "BANK_STATEMENT_IMPORT_BATCH";
 
@@ -70,6 +83,7 @@ public class StatementImportService {
     private final BankIntegrationAuditEventRepository auditEventRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final TransactionDetailsCsvParser parser;
+    private final MonthlyTemplateCsvParser monthlyParser;
     private final CompanyAccessVerifier companyAccessVerifier;
     private final Clock clock;
     private final TransactionTemplate writeTransaction;
@@ -81,6 +95,7 @@ public class StatementImportService {
                                   BankIntegrationAuditEventRepository auditEventRepository,
                                   OutboxEventRepository outboxEventRepository,
                                   TransactionDetailsCsvParser parser,
+                                  MonthlyTemplateCsvParser monthlyParser,
                                   CompanyAccessVerifier companyAccessVerifier,
                                   Clock clock,
                                   PlatformTransactionManager transactionManager) {
@@ -90,6 +105,7 @@ public class StatementImportService {
         this.auditEventRepository = auditEventRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.parser = parser;
+        this.monthlyParser = monthlyParser;
         this.companyAccessVerifier = companyAccessVerifier;
         this.clock = clock;
         this.writeTransaction = new TransactionTemplate(transactionManager);
@@ -106,11 +122,91 @@ public class StatementImportService {
 
         BankStatementImportBatch batch = writeTransaction.execute(status -> {
             BankAccount account = activeCurrentAccount(companyId, bankAccountId);
-            return statement.hasErrors()
-                    ? recordRejection(account, upload, statement, fileSha256, actor)
-                    : importRows(account, upload, statement, fileSha256, actor);
+            if (statement.hasErrors()) {
+                return recordRejection(account, upload, statement, fileSha256, actor);
+            }
+            importStore.lockAccountImports(account.getId());
+            // A month entered from the template already holds these days, with other descriptions, so
+            // the bank's rows would not be recognised as duplicates.
+            List<String> months = importStore.importedOverlapping(companyId, account.getId(), statement.periodStart(),
+                    statement.periodEnd(), MonthlyTemplateCsvParser.FORMAT);
+            if (!months.isEmpty()) {
+                throw new MonthAlreadyImportedException("These dates are already imported from the monthly template ("
+                        + String.join(", ", months) + "). Remove that import first.");
+            }
+            return importRows(account, upload, statement, fileSha256, actor, statement.periodStart(),
+                    statement.periodEnd());
         });
+        return finish(batch, statement);
+    }
 
+    /**
+     * Imports one month of the current account's transactions from FlowLedger's monthly template,
+     * each with its category. Only a month that has ended can be imported, and each month only once
+     * (remove the earlier import to replace it). The import covers every day of the month, so a day
+     * without transactions counts as a known day with none. When the previous month was imported,
+     * this month must open with its closing balance, so no rows are missing between them.
+     */
+    public StatementImportResponse importMonth(Jwt user, UUID companyId, UUID bankAccountId, String monthText,
+                                               MultipartFile file) {
+        companyAccessVerifier.verify(user, companyId, MONTHLY_ROLES);
+        YearMonth month = parseMonth(monthText);
+        if (!month.isBefore(YearMonth.now(clock))) {
+            throw new InvalidRequestException("Bank transactions are imported after the month ends. "
+                    + MonthlyTemplateCsvParser.monthName(month) + " has not ended yet.");
+        }
+        StatementUpload upload = StatementUpload.from(file);
+        ParsedStatement parsed = monthlyParser.parse(upload.content(), month);
+        String fileSha256 = TransactionFingerprints.sha256(upload.content());
+        UUID actor = UUID.fromString(user.getSubject());
+        LocalDate from = month.atDay(1);
+        LocalDate to = month.atEndOfMonth();
+
+        ParsedStatement[] checked = {parsed};
+        BankStatementImportBatch batch = writeTransaction.execute(status -> {
+            BankAccount account = activeCurrentAccount(companyId, bankAccountId);
+            importStore.lockAccountImports(account.getId());
+            List<String> overlapping = importStore.importedOverlapping(companyId, account.getId(), from, to, null);
+            if (!overlapping.isEmpty()) {
+                throw new MonthAlreadyImportedException("Bank transactions for " + MonthlyTemplateCsvParser.monthName(month)
+                        + " are already imported (" + String.join(", ", overlapping) + "). Remove that import first to "
+                        + "replace it.");
+            }
+            if (!parsed.hasErrors()) {
+                checked[0] = checkOpeningBalance(account, parsed, from);
+            }
+            return checked[0].hasErrors()
+                    ? recordRejection(account, upload, checked[0], fileSha256, actor)
+                    : importRows(account, upload, checked[0], fileSha256, actor, from, to);
+        });
+        return finish(batch, checked[0]);
+    }
+
+    // The month opens with the balance before its oldest row; it must equal last month's imported closing balance.
+    private ParsedStatement checkOpeningBalance(BankAccount account, ParsedStatement statement, LocalDate monthStart) {
+        StatementLine oldest = statement.transactionsOldestFirst().isEmpty()
+                ? statement.latestLine() : statement.transactionsOldestFirst().getFirst();
+        BigDecimal opening = oldest.runningBalance().subtract(oldest.signedAmount());
+        Optional<BigDecimal> previous = importStore.importedClosingBalance(account.getCompanyId(), account.getId(),
+                monthStart.minusDays(1));
+        if (previous.isEmpty() || previous.get().compareTo(opening) == 0) {
+            return statement;
+        }
+        return ParsedStatement.failed(statement.format(), List.of(new StatementError(oldest.lineNumber(),
+                "Running Balance", "The month opens with LKR " + opening.toPlainString() + " (the oldest Running Balance "
+                + "less its amount), but last month's import closed with LKR " + previous.get().toPlainString()
+                + ". Check for missing or extra rows.")));
+    }
+
+    private static YearMonth parseMonth(String text) {
+        try {
+            return YearMonth.parse(text == null ? "" : text.trim());
+        } catch (DateTimeParseException e) {
+            throw new InvalidRequestException("month must be a month in the format YYYY-MM, for example 2026-09.");
+        }
+    }
+
+    private StatementImportResponse finish(BankStatementImportBatch batch, ParsedStatement statement) {
         if (statement.hasErrors()) {
             log.info("Statement import {} rejected with {} errors", batch.getId(), statement.errors().size());
             throw new StatementRejectedException(batch.getId(), statement.errors());
@@ -127,7 +223,7 @@ public class StatementImportService {
      * already imported belong to an earlier import and are kept.
      */
     public StatementImportResponse removeImport(Jwt user, UUID companyId, UUID batchId) {
-        companyAccessVerifier.verify(user, companyId, IMPORT_ROLES);
+        companyAccessVerifier.verify(user, companyId, MONTHLY_ROLES);
         UUID actor = UUID.fromString(user.getSubject());
 
         BankStatementImportBatch batch = writeTransaction.execute(status -> {
@@ -197,19 +293,26 @@ public class StatementImportService {
         return batch;
     }
 
+    /**
+     * Stores the rows and the closing balance. The period is the days the import covers: the
+     * statement's first to last transaction date, or the whole month for a monthly import. The
+     * balance after the newest row applies at the end of the period's last day.
+     */
     private BankStatementImportBatch importRows(BankAccount account, StatementUpload upload, ParsedStatement statement,
-                                                String fileSha256, UUID actor) {
+                                                String fileSha256, UUID actor, LocalDate periodStart,
+                                                LocalDate periodEnd) {
         BankStatementImportBatch batch = batchRepository.saveAndFlush(BankStatementImportBatch.imported(
                 account.getCompanyId(), account.getId(), upload.filename(), fileSha256, statement.format(), actor,
-                statement.periodStart(), statement.periodEnd(), statement.lines().size()));
+                periodStart, periodEnd, statement.lines().size()));
 
         List<StatementLine> transactions = statement.transactionsOldestFirst();
         List<String> fingerprints = TransactionFingerprints.of(transactions);
+        Instant now = clock.instant();
         int imported = 0;
         for (int i = 0; i < transactions.size(); i++) {
             StatementLine line = transactions.get(i);
             Optional<UUID> transactionId = importStore.insertTransaction(account.getCompanyId(), account.getId(),
-                    account.getCurrency(), batch.getId(), line, fingerprints.get(i));
+                    account.getCurrency(), batch.getId(), line, fingerprints.get(i), actor, now);
             if (transactionId.isPresent()) {
                 imported++;
                 publish("BankTransaction", transactionId.get(), "BankTransactionImported",
@@ -217,10 +320,9 @@ public class StatementImportService {
             }
         }
 
-        // The newest row's running balance is the balance after the statement's last transaction.
-        // The statement has no times, so it applies at the end of that day.
+        // The statement has no times, so its closing balance applies at the end of the period.
         StatementLine latest = statement.latestLine();
-        OffsetDateTime balanceAsOf = latest.transactionDate().atTime(LocalTime.of(23, 59, 59))
+        OffsetDateTime balanceAsOf = periodEnd.atTime(LocalTime.of(23, 59, 59))
                 .atZone(clock.getZone()).toOffsetDateTime();
         boolean snapshotRecorded = importStore.insertBalanceSnapshot(account.getCompanyId(), account.getId(),
                 account.getCurrency(), latest.runningBalance(), balanceAsOf, batch.getId());
@@ -274,7 +376,7 @@ public class StatementImportService {
         payload.put("direction", line.direction().name());
         payload.put("amount", line.amount().toPlainString());
         payload.put("currency", account.getCurrency());
-        payload.put("category", TransactionCategory.UNCLASSIFIED.name());
+        payload.put("category", line.category().name());
         return payload;
     }
 

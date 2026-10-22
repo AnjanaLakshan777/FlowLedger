@@ -19,6 +19,7 @@ import type { ForecastVsActual } from "@/data/types"
 import { colomboLocal, forecastVsActualWeeks } from "@/lib/api/adapters"
 import { errorMessage } from "@/lib/api/client"
 import { flowledger, type ForecastWarning } from "@/lib/api/flowledger"
+import { endOfLastMonth, monthLabel } from "@/lib/bank-template"
 import { fmt, sum } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -68,8 +69,9 @@ export default function ForecastVsActualPage() {
   const runsNotReady = useNotReady(["forecast"])
   const runs = forecastInfo?.runs ?? []
   const [runId, setRunId] = useState<string | null>(null)
-  // Only days before today can have an imported statement, so a forecast starting today or later has nothing to compare yet.
-  const comparable = (r: { horizonStartDate: string }) => r.horizonStartDate < today
+  // Bank transactions are imported after each month ends, so only days up to the end of last month have actuals.
+  const actualsThrough = endOfLastMonth(today)
+  const comparable = (r: { horizonStartDate: string }) => r.horizonStartDate <= actualsThrough
   const selected = runId ?? runs.find(comparable)?.id ?? runs[0]?.id ?? null
   const comparison = useComparison(live ? selected : null)
   const all = live ? comparison.data?.rows ?? [] : demoRows
@@ -111,6 +113,16 @@ export default function ForecastVsActualPage() {
   return (
     <>
       {header}
+      {live && (
+        <Alert variant="info">
+          <Info />
+          <AlertTitle>Compared up to {fmt.date(actualsThrough)}</AlertTitle>
+          <AlertDescription>
+            Bank transactions are imported once a month, after the month ends, so {monthLabel(today.slice(0, 7))} is compared once its
+            transactions are imported. Forecasts made this month have nothing to compare yet.
+          </AlertDescription>
+        </Alert>
+      )}
       {live && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-muted-foreground text-xs">Forecast compared</span>
@@ -158,7 +170,7 @@ export default function ForecastVsActualPage() {
         <CardHeader>
           <CardTitle>{m.label} by {live ? "period" : "week"}</CardTitle>
           <CardDescription>{live
-            ? `7-day periods from the forecast start; only days covered by an imported bank statement${comparison.data?.comparedThrough ? `, up to ${fmt.date(comparison.data.comparedThrough)}` : ""}`
+            ? `7-day periods from the forecast start; only days with imported bank transactions, up to the end of last month${comparison.data?.comparedThrough ? `, up to ${fmt.date(comparison.data.comparedThrough)}` : ""}`
             : "Forecast made at the start of each week vs. bank-confirmed actual"}</CardDescription>
           <CardAction>
             <Segmented value={metric} onChange={setMetric} options={[{ value: "closing", label: "Closing balance" }, { value: "in", label: "Receipts" }, { value: "out", label: "Cheque outflows" }]} />
@@ -178,7 +190,7 @@ export default function ForecastVsActualPage() {
           rowKey={(r) => r.week_start}
           defaultSort={{ key: "week", dir: "desc" }}
           maxHeight="none"
-          empty={live ? "No days of this forecast are covered by an imported bank statement yet." : "No weeks in this date range."}
+          empty={live ? "No days of this forecast have imported bank transactions yet." : "No weeks in this date range."}
           columns={[
             { key: "week", header: "Period", sortValue: (r) => r.week_start, cell: (r) => <CellStack className="whitespace-nowrap" main={<b className="font-semibold">{fmt.range(r.week_start, r.week_end)}</b>} sub={r.days_compared != null && r.days_compared < 7 ? `${r.days_compared} of 7 days confirmed` : undefined} /> },
             { key: "fi", header: <>Expected receipts{F}</>, numeric: true, sortValue: (r) => r.forecast_in ?? 0, cell: (r) => <span className="text-muted-foreground">{r.forecast_in == null ? "Not estimated" : fmt.amt(r.forecast_in)}</span> },

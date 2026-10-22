@@ -37,6 +37,18 @@ public class StatementImportController {
         return statementImportService.importStatement(user, companyId, bankAccountId, file);
     }
 
+    // One ended month of transactions from FlowLedger's monthly template, each with its category.
+    @PostMapping(path = "/bank-accounts/{bankAccountId}/monthly-imports",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public StatementImportResponse importMonth(@AuthenticationPrincipal Jwt user,
+                                               @PathVariable UUID companyId,
+                                               @PathVariable UUID bankAccountId,
+                                               @RequestParam(value = "month", required = false) String month,
+                                               @RequestParam("file") MultipartFile file) {
+        return statementImportService.importMonth(user, companyId, bankAccountId, month, file);
+    }
+
     @GetMapping("/statement-imports")
     public List<StatementImportResponse> listImports(@AuthenticationPrincipal Jwt user, @PathVariable UUID companyId) {
         return statementImportService.listImports(user, companyId);

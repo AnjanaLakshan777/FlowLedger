@@ -1,5 +1,6 @@
 package com.flowledger.bankintegration.statement;
 
+import com.flowledger.bankintegration.entity.TransactionCategory;
 import com.flowledger.bankintegration.entity.TransactionDirection;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -45,13 +46,19 @@ public class TransactionDetailsCsvParser {
     static final String RUNNING_BALANCE = "Running Balance";
     static final String CHEQUE_NUMBER = "Cheque Number";
     static final String BRANCH_ID = "Branch ID";
+    // Added by the user to the bank's own columns in FlowLedger's monthly template.
+    static final String CATEGORY = "Category";
+    static final String OTHER_DESCRIPTION = "Other Description";
     private static final List<String> COLUMNS = List.of(
             DATE, DESCRIPTION, TRANSACTION_TYPE, CREDIT_AMOUNT, DEBIT_AMOUNT, RUNNING_BALANCE, CHEQUE_NUMBER, BRANCH_ID);
+    public static final List<String> COLUMNS_WITH_CATEGORIES = List.of(
+            DATE, DESCRIPTION, TRANSACTION_TYPE, CREDIT_AMOUNT, DEBIT_AMOUNT, RUNNING_BALANCE, CHEQUE_NUMBER, BRANCH_ID,
+            CATEGORY, OTHER_DESCRIPTION);
+    private static final int MAX_OTHER_DESCRIPTION_LENGTH = 120;
 
     // The header follows at most a few title rows such as "TRANSACTION DETAILS".
     private static final int MAX_ROWS_BEFORE_HEADER = 10;
     private static final int MAX_DATA_ROWS = 20_000;
-    private static final int MAX_REPORTED_ERRORS = 100;
     private static final int MAX_DESCRIPTION_LENGTH = 500;
 
     // Month first, as in "9/30/2026". Strict, so 2/30 or 13/1 are rejected rather than adjusted.
@@ -64,23 +71,36 @@ public class TransactionDetailsCsvParser {
     private static final Pattern CONTROL_CHARACTERS = Pattern.compile("\\p{Cntrl}");
 
     public ParsedStatement parse(byte[] content) {
+        return parse(content, false, FORMAT);
+    }
+
+    /**
+     * The bank's columns plus Category (required) and Other Description (optional), as in
+     * FlowLedger's monthly template: the user pastes the bank's rows and gives each its category.
+     */
+    public ParsedStatement parseWithCategories(byte[] content, String format) {
+        return parse(content, true, format);
+    }
+
+    private ParsedStatement parse(byte[] content, boolean withCategories, String format) {
         List<CSVRecord> records;
         try {
             records = readRecords(content);
         } catch (CharacterCodingException e) {
-            return fileError("The file is not valid UTF-8 text.");
+            return fileError(format, "The file is not valid UTF-8 text.");
         } catch (IOException | UncheckedIOException e) {
-            return fileError("The file is not valid CSV, for example because of an unclosed quote.");
+            return fileError(format, "The file is not valid CSV, for example because of an unclosed quote.");
         }
 
-        Errors errors = new Errors();
-        int headerIndex = findHeader(records, errors);
+        List<String> expectedColumns = withCategories ? COLUMNS_WITH_CATEGORIES : COLUMNS;
+        StatementErrors errors = new StatementErrors();
+        int headerIndex = findHeader(records, expectedColumns, errors);
         if (headerIndex < 0) {
-            return ParsedStatement.failed(FORMAT, errors.list);
+            return ParsedStatement.failed(format, errors.list);
         }
-        Map<String, Integer> columns = columnIndexes(records.get(headerIndex), errors);
+        Map<String, Integer> columns = columnIndexes(records.get(headerIndex), expectedColumns, errors);
         if (errors.any()) {
-            return ParsedStatement.failed(FORMAT, errors.list);
+            return ParsedStatement.failed(format, errors.list);
         }
 
         List<StatementLine> lines = new ArrayList<>();
@@ -93,28 +113,22 @@ public class TransactionDetailsCsvParser {
                 errors.add(null, null, "The statement has more than " + MAX_DATA_ROWS + " rows.");
                 break;
             }
-            StatementLine line = parseLine(record, headerSize, columns, errors);
+            StatementLine line = parseLine(record, headerSize, columns, withCategories, errors);
             if (line != null) {
                 lines.add(line);
             }
         }
         if (errors.any()) {
-            return ParsedStatement.failed(FORMAT, errors.list);
+            return ParsedStatement.failed(format, errors.list);
         }
         if (lines.isEmpty()) {
-            return fileError("The statement contains no transactions.");
+            return fileError(format, "The statement contains no transactions.");
         }
 
-        boolean newestFirst = isNewestFirst(lines, errors);
-        if (!errors.any()) {
-            checkDateOrder(lines, newestFirst, errors);
-        }
-        if (!errors.any()) {
-            checkRunningBalances(lines, newestFirst, errors);
-        }
+        boolean newestFirst = StatementOrder.check(lines, DATE, RUNNING_BALANCE, errors);
         return errors.any()
-                ? ParsedStatement.failed(FORMAT, errors.list)
-                : new ParsedStatement(FORMAT, List.copyOf(lines), newestFirst, List.of());
+                ? ParsedStatement.failed(format, errors.list)
+                : new ParsedStatement(format, List.copyOf(lines), newestFirst, List.of());
     }
 
     // Record numbers equal file line numbers: empty lines are kept as records and line breaks
@@ -134,7 +148,7 @@ public class TransactionDetailsCsvParser {
         }
     }
 
-    private static int findHeader(List<CSVRecord> records, Errors errors) {
+    private static int findHeader(List<CSVRecord> records, List<String> expectedColumns, StatementErrors errors) {
         int limit = Math.min(records.size(), MAX_ROWS_BEFORE_HEADER + 1);
         for (int i = 0; i < limit; i++) {
             CSVRecord record = records.get(i);
@@ -148,13 +162,13 @@ public class TransactionDetailsCsvParser {
                 return -1;
             }
         }
-        errors.add(null, null, "The file does not have the expected header row: " + String.join(", ", COLUMNS) + ".");
+        errors.add(null, null, "The file does not have the expected header row: " + String.join(", ", expectedColumns) + ".");
         return -1;
     }
 
-    private static Map<String, Integer> columnIndexes(CSVRecord header, Errors errors) {
+    private static Map<String, Integer> columnIndexes(CSVRecord header, List<String> expectedColumns, StatementErrors errors) {
         Map<String, String> expected = new HashMap<>();
-        COLUMNS.forEach(column -> expected.put(normalized(column), column));
+        expectedColumns.forEach(column -> expected.put(normalized(column), column));
 
         Map<String, Integer> indexes = new HashMap<>();
         for (int i = 0; i < header.size(); i++) {
@@ -169,14 +183,14 @@ public class TransactionDetailsCsvParser {
                 errors.add(lineOf(header), null, "Column \"" + column + "\" appears more than once.");
             }
         }
-        COLUMNS.stream()
+        expectedColumns.stream()
                 .filter(column -> !indexes.containsKey(column))
                 .forEach(column -> errors.add(lineOf(header), null, "Column \"" + column + "\" is missing."));
         return indexes;
     }
 
     private static StatementLine parseLine(CSVRecord record, int headerSize, Map<String, Integer> columns,
-                                           Errors errors) {
+                                           boolean withCategories, StatementErrors errors) {
         int line = lineOf(record);
         if (record.size() != headerSize) {
             errors.add(line, null, "Expected " + headerSize + " columns but found " + record.size() + ".");
@@ -238,17 +252,64 @@ public class TransactionDetailsCsvParser {
             errors.add(line, BRANCH_ID, "Branch ID must be up to 20 letters, digits or hyphens.");
         }
 
+        TransactionCategory category = TransactionCategory.UNCLASSIFIED;
+        String otherDescription = null;
+        if (withCategories) {
+            category = parseCategory(field(record, columns, CATEGORY), direction, line, errors);
+            // A blank or all-zero number means no cheque; an invalid one is already reported above.
+            boolean noCheque = chequeText.isEmpty() || (CHEQUE.matcher(chequeText).matches() && chequeNumber(chequeText) == null);
+            if (category == TransactionCategory.CHEQUE_PAYMENT && noCheque) {
+                errors.add(line, CHEQUE_NUMBER, "A cheque payment needs its Cheque Number, so the cheque can be shown as cleared.");
+            }
+            String otherText = field(record, columns, OTHER_DESCRIPTION);
+            if (otherText.length() > MAX_OTHER_DESCRIPTION_LENGTH) {
+                errors.add(line, OTHER_DESCRIPTION, "Other Description is longer than " + MAX_OTHER_DESCRIPTION_LENGTH + " characters.");
+            } else if (CONTROL_CHARACTERS.matcher(otherText).find()) {
+                errors.add(line, OTHER_DESCRIPTION, "Other Description contains control characters.");
+            } else if (category == TransactionCategory.OTHER && !otherText.isEmpty()) {
+                otherDescription = otherText;
+            }
+        }
+
         if (errors.list.size() > errorsBefore) {
             return null;
         }
         return new StatementLine(line, date, direction, amount, description, runningBalance,
-                chequeNumber(chequeText), branchText.isEmpty() ? null : branchText);
+                chequeNumber(chequeText), branchText.isEmpty() ? null : branchText, category, otherDescription);
+    }
+
+    /**
+     * The category's name or its label, in any case: CASH_SALES_DEPOSIT or "Cash sales deposit",
+     * CARD_SALES_SETTLEMENT or "Card settlement", CHEQUE_PAYMENT or "Cheque payment", OTHER. It must fit
+     * the direction: sales receipts are money in and cheque payments money out.
+     */
+    private static TransactionCategory parseCategory(String text, TransactionDirection direction, int line,
+                                                     StatementErrors errors) {
+        String key = text.trim().toUpperCase(Locale.ROOT).replaceAll("[\\s-]+", "_");
+        TransactionCategory category = switch (key) {
+            case "CASH_SALES_DEPOSIT", "CASH_DEPOSIT" -> TransactionCategory.CASH_SALES_DEPOSIT;
+            case "CARD_SALES_SETTLEMENT", "CARD_SETTLEMENT" -> TransactionCategory.CARD_SALES_SETTLEMENT;
+            case "CHEQUE_PAYMENT" -> TransactionCategory.CHEQUE_PAYMENT;
+            case "OTHER" -> TransactionCategory.OTHER;
+            default -> null;
+        };
+        if (category == null) {
+            errors.add(line, CATEGORY, text.isEmpty() ? "Category is missing."
+                    : "\"" + text + "\" is not a category. Use CASH_SALES_DEPOSIT, CARD_SALES_SETTLEMENT, CHEQUE_PAYMENT or OTHER.");
+            return TransactionCategory.UNCLASSIFIED;
+        }
+        if (direction != null && !category.fits(direction)) {
+            errors.add(line, CATEGORY, category == TransactionCategory.CHEQUE_PAYMENT
+                    ? "A cheque payment is money out, so Transaction Type must be Debit."
+                    : "A sales receipt is money in, so Transaction Type must be Credit.");
+        }
+        return category;
     }
 
     // The amount must be in the column matching the transaction type. A blank or zero value in
     // the other column is fine; a non-zero one contradicts the type.
     private static BigDecimal amountFor(TransactionDirection direction, BigDecimal credit, BigDecimal debit,
-                                        int line, Errors errors) {
+                                        int line, StatementErrors errors) {
         BigDecimal amount = direction == TransactionDirection.CREDIT ? credit : debit;
         BigDecimal other = direction == TransactionDirection.CREDIT ? debit : credit;
         String amountColumn = direction == TransactionDirection.CREDIT ? CREDIT_AMOUNT : DEBIT_AMOUNT;
@@ -267,7 +328,7 @@ public class TransactionDetailsCsvParser {
     }
 
     private static BigDecimal parseOptionalAmount(CSVRecord record, Map<String, Integer> columns, String column,
-                                                  int line, Errors errors) {
+                                                  int line, StatementErrors errors) {
         String text = field(record, columns, column);
         if (text.isEmpty()) {
             return null;
@@ -295,50 +356,6 @@ public class TransactionDetailsCsvParser {
     // The bank fills the column with zeros when there is no cheque; real numbers keep leading zeros.
     private static String chequeNumber(String text) {
         return text.isEmpty() || text.chars().allMatch(c -> c == '0') ? null : text;
-    }
-
-    private static boolean isNewestFirst(List<StatementLine> lines, Errors errors) {
-        LocalDate first = lines.getFirst().transactionDate();
-        LocalDate last = lines.getLast().transactionDate();
-        if (!first.equals(last)) {
-            return first.isAfter(last);
-        }
-        // All rows share one date, so only the running balances can show the order.
-        boolean newestFirst = balancesFollow(lines, true);
-        boolean oldestFirst = balancesFollow(lines, false);
-        if (newestFirst && oldestFirst && lines.size() > 1) {
-            errors.add(null, null, "The order of the transactions cannot be determined from the statement.");
-        }
-        return newestFirst || !oldestFirst;
-    }
-
-    private static void checkDateOrder(List<StatementLine> lines, boolean newestFirst, Errors errors) {
-        for (int i = 1; i < lines.size(); i++) {
-            LocalDate previous = lines.get(i - 1).transactionDate();
-            LocalDate current = lines.get(i).transactionDate();
-            if (newestFirst ? current.isAfter(previous) : current.isBefore(previous)) {
-                errors.add(lines.get(i).lineNumber(), DATE, "Transactions are not in date order.");
-                return;
-            }
-        }
-    }
-
-    private static void checkRunningBalances(List<StatementLine> lines, boolean newestFirst, Errors errors) {
-        for (int i = 1; i < lines.size(); i++) {
-            StatementLine older = newestFirst ? lines.get(i) : lines.get(i - 1);
-            StatementLine newer = newestFirst ? lines.get(i - 1) : lines.get(i);
-            if (older.runningBalance().add(newer.signedAmount()).compareTo(newer.runningBalance()) != 0) {
-                errors.add(newer.lineNumber(), RUNNING_BALANCE,
-                        "Running Balance does not follow from the previous balance and this amount; rows may be missing.");
-                return;
-            }
-        }
-    }
-
-    private static boolean balancesFollow(List<StatementLine> lines, boolean newestFirst) {
-        Errors ignored = new Errors();
-        checkRunningBalances(lines, newestFirst, ignored);
-        return !ignored.any();
     }
 
     private static LocalDate parseDate(String text) {
@@ -370,21 +387,8 @@ public class TransactionDetailsCsvParser {
         return Math.toIntExact(record.getRecordNumber());
     }
 
-    private static ParsedStatement fileError(String message) {
-        return ParsedStatement.failed(FORMAT, List.of(new StatementError(null, null, message)));
+    private static ParsedStatement fileError(String format, String message) {
+        return ParsedStatement.failed(format, List.of(new StatementError(null, null, message)));
     }
 
-    private static final class Errors {
-        private final List<StatementError> list = new ArrayList<>();
-
-        void add(Integer line, String field, String message) {
-            if (list.size() < MAX_REPORTED_ERRORS) {
-                list.add(new StatementError(line, field, message));
-            }
-        }
-
-        boolean any() {
-            return !list.isEmpty();
-        }
-    }
 }

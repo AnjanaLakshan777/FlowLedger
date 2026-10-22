@@ -621,13 +621,59 @@ confirmed business rules and must be reviewed before production.
   bypass. With no snapshot it returns 404, never a zero balance. It exists so
   forecast-service can read the confirmed balance.
 
+### Monthly Bank Transactions Template
+
+Confirmed by the product owner (2026-10-22): bank transactions are entered
+once a month, after the month ends, by the Accountant (or a Finance
+Controller or Company Admin), from a FlowLedger CSV template like the
+historical sales template. The current month is never imported, so Forecast
+vs Actual compares only up to the end of last month (section 10). Cheques
+are shown as cleared from these transactions (section 11).
+
+- `POST /bank-accounts/{bankAccountId}/monthly-imports` (multipart `file`
+  and `month` as `YYYY-MM`), format `FLOWLEDGER_MONTHLY_CSV`. The month must
+  have ended in `Asia/Colombo` (400 otherwise). The template is built in the
+  browser; the API only parses it.
+- The template is the bank's own "Transaction details" report, row by row
+  as printed (individual transactions, not daily totals), with two columns
+  added by the user: `Date`, `Description`, `Transaction Type`, `Credit
+  Amount`, `Debit Amount`, `Running Balance`, `Cheque Number`, `Branch ID`,
+  `Category`, `Other Description`. It is read by the bank statement parser
+  with every bank-format rule (title rows, `M/d/yyyy` dates, thousands
+  separators, all-zero cheque number meaning none, zero-amount rows skipped)
+  plus: `Category` is required (`CASH_SALES_DEPOSIT`/"Cash sales deposit",
+  `CARD_SALES_SETTLEMENT`/"Card settlement", `CHEQUE_PAYMENT`/"Cheque
+  payment", `OTHER`; any case; fitting the type); a cheque payment needs its
+  cheque number; `Other Description` is optional and kept only for `OTHER`
+  (so interest, ATM and card charges can stay plain `OTHER`); every row must
+  be in the chosen month.
+- Same checks as a bank statement otherwise: one invalid row rejects the
+  file (422, kept as a `FAILED` batch), rows in date order either way
+  (newest first, as the bank prints, or oldest first), and an unbroken
+  running-balance chain. When the previous month was imported
+  (an imported batch ending on its last day), the month must open with that
+  closing balance (the first row's balance less its amount), so no rows are
+  missing between months.
+- Each month is imported once: any imported batch overlapping the month
+  (template or bank statement) gives 409; remove it first to replace it. A
+  bank-format statement overlapping a month imported from the template is
+  refused the same way, because its rows would not be recognised as
+  duplicates. Imports of one account are serialized with an advisory lock.
+- The batch covers the whole month (`period_start` to `period_end`), so a
+  day without transactions counts as a known day with none. Transactions
+  are stored with their category, method `MANUAL`, and the importing user as
+  classifier; `BankTransactionImported` carries that category. The closing
+  balance is recorded as of 23:59:59 on the month's last day.
+
 ### Statement Authorization, Classification, and Audit
 
 - Role policy:
 
   | Operation | Allowed |
   |---|---|
-  | Import a statement | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+  | Import a statement (bank format) | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
+  | Import a month from the template | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
+  | Remove an import | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` (since 2026-10-22) |
   | Classify a transaction | `COMPANY_ADMIN`, `FINANCE_CONTROLLER` |
   | View imports and transactions | `COMPANY_ADMIN`, `FINANCE_CONTROLLER`, `ACCOUNTANT` |
 
@@ -1166,10 +1212,15 @@ confirmed.
   credits; actual outflows are `CHEQUE_PAYMENT` debits; both by actual bank
   transaction date. `OTHER` and `UNCLASSIFIED` are in neither total, and
   unclassified transactions are counted and labelled.
-- Only days covered by an imported statement, up to today, have actual
-  values; other days are null, not zero. The actual closing balance is the
-  run's opening balance plus every actual transaction since, and stops at
-  the first day without statement coverage.
+- Only days covered by an imported statement, up to the end of last month
+  (`actualsThrough` in the response), have actual values; other days are
+  null, not zero. Since 2026-10-22 the current month is never compared,
+  because its bank transactions are imported after it ends (section 7,
+  Monthly Bank Transactions Template); before, days up to today were.
+  `ACTUALS_INCOMPLETE` counts days up to the end of last month without
+  coverage. The actual closing balance is the run's opening balance plus
+  every actual transaction since, and stops at the first day without
+  statement coverage.
 - Differences are actual minus forecast. If the run did not estimate
   inflows, inflow differences are null.
 
@@ -1530,16 +1581,27 @@ retry; the frontend never falls back to demonstration data.
   same day, so a new run is saved only on a new day or after the inputs
   changed. If the request fails, the last saved run stays on screen with a
   "could not be updated automatically" notice and a retry.
-- Cheques are never shown as paid: a Scheduled cheque past its expected
-  clearing date is labelled "Past clearing date". The frontend rule that
-  treated such cheques as paid was removed. Cancelling requires a reason.
+- A cheque is shown as "Cleared" (with the bank's date, and the bank's
+  amount if it differs) when the imported bank transactions include a
+  `CHEQUE_PAYMENT` debit with its number, leading zeros ignored. The
+  frontend matches them from the bank transactions it already loads;
+  payment-service keeps the cheque `ISSUED`. Without such a transaction, a
+  Scheduled cheque past its expected clearing date is labelled "Past
+  clearing date" and is never assumed paid. A cleared cheque cannot be
+  edited or cancelled. Cancelling requires a reason.
+- Bank Account (statement import mode): monthly template upload with a
+  month picker (ended months only, imported months marked), template
+  download, column guide, row errors, and the import history (template and
+  bank-format imports). The bank-format statement upload is no longer on
+  the screen; its API remains.
 - A missing confirmed balance is shown as "No confirmed balance yet", never
   as 0. Expected receipts that were not estimated are shown as "Not
   estimated".
 - Forecast vs Actual compares one saved run, chosen by the user, because the
   baseline-run rule is open. By default it is the newest run that started
-  before today (only past days can have imported statements); runs starting
-  today or later are listed as "nothing to compare yet".
+  by the end of last month (only ended months have imported transactions);
+  later runs are listed as "nothing to compare yet", and the screen says up
+  to which date it compares.
 - Historical Sales Import is live: template download, CSV upload with the
   server's validation results, issues and all-rows preview, import history,
   and approval or rejection for Finance Controllers and Company Admins. Actions follow the
@@ -1554,9 +1616,11 @@ retry; the frontend never falls back to demonstration data.
 
 - Daily sales have no note and no recorder name in the API; the screen shows
   "You" or "Another user", and a recorded date cannot be changed.
-- There is no statement upload screen and no bank account configuration
-  screen yet, although both APIs exist.
 - Bank transactions have no value date in the API.
+- With monthly imports the latest confirmed balance is the end of last
+  month, so the forecast starts on the 1st of the current month and is
+  labelled stale after 3 days. How the current balance should reach the
+  forecast between imports is open (section 13).
 
 ## 12. API Gateway and Environment Configuration
 
@@ -1750,6 +1814,10 @@ The following must be researched or agreed before implementation:
   (read, not copied).
 - Whether a forecast may run from a stale balance (currently it runs and is
   labelled), and the stale threshold.
+- With bank transactions imported monthly, how today's balance reaches the
+  forecast between imports (for example a manual balance entry alongside
+  statement import, which the connection modes do not allow yet), and
+  whether the stale threshold should follow the monthly cycle.
 - Whether the horizon should start the day after the balance date (current)
   or on the current day, which matters when the balance is stale.
 - Treatment of `ISSUED` cheques expected on or before the balance date that

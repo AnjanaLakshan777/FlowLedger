@@ -24,6 +24,8 @@ export interface StatementError { line: number | null; field: string | null; mes
 
 export interface ApiStatementImport {
   id: string; bankAccountId: string; filename: string; status: "IMPORTED" | "FAILED" | "REMOVED" | string
+  /** FLOWLEDGER_MONTHLY_CSV for the monthly template, TRANSACTION_DETAILS_CSV for the bank's own statement. */
+  fileFormat: string
   periodStart: string | null; periodEnd: string | null; importedAt: string; errorSummary: string | null
   rowCount: number; importedRowCount: number; duplicateRowCount: number; skippedRowCount: number
   validationErrors: StatementError[]; earlierImportsOfSameFile: string[]
@@ -100,7 +102,9 @@ export interface ForecastVsActualDay {
 }
 
 export interface ForecastVsActual {
-  forecastRunId: string; horizonStartDate: string; horizonEndDate: string; inflowEstimateStatus: string; comparedThrough: string | null
+  forecastRunId: string; horizonStartDate: string; horizonEndDate: string; inflowEstimateStatus: string
+  /** The last day that can have actuals: the end of last month (bank transactions are imported monthly). */
+  actualsThrough: string; comparedThrough: string | null
   days: ForecastVsActualDay[]; warnings: ForecastWarning[]
   totals: { daysCompared: number; unclassifiedTransactionCount: number; unclassifiedTransactionAmount: number }
 }
@@ -211,6 +215,13 @@ export const flowledger = {
     const form = new FormData()
     form.append("file", file)
     return api<ApiStatementImport>(`${bank(c)}/bank-accounts/${accountId}/statement-imports`, { method: "POST", form })
+  },
+  /** One ended month (YYYY-MM) of transactions from the monthly template, each with its category. */
+  uploadMonthlyTransactions: (c: string, accountId: string, month: string, file: File) => {
+    const form = new FormData()
+    form.append("month", month)
+    form.append("file", file)
+    return api<ApiStatementImport>(`${bank(c)}/bank-accounts/${accountId}/monthly-imports`, { method: "POST", form })
   },
   classifyTransaction: (c: string, id: string, category: TransactionCategory, otherDescription: string | null = null) =>
     api<ApiTransaction>(`${bank(c)}/bank-transactions/${id}/classification`, { method: "PUT", json: { category, otherDescription } }),

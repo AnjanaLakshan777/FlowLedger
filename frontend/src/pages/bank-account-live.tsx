@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { AlertTriangle, FileUp, Info, Landmark, Pencil, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
+import { AlertTriangle, Download, FileUp, Info, Landmark, Lock, Pencil, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -22,6 +22,7 @@ import { ApiError, errorMessage } from "@/lib/api/client"
 import {
   flowledger, type ApiBalance, type ApiBankAccount, type ApiStatementImport, type ApiTransaction, type StatementError, type TransactionCategory,
 } from "@/lib/api/flowledger"
+import { BANK_TEMPLATE_COLUMNS, BANK_TEMPLATE_CSV, BANK_TEMPLATE_FILE_NAME, BANK_TEMPLATE_LIMITS, endedMonths, monthLabel } from "@/lib/bank-template"
 import { fmt } from "@/lib/format"
 
 const CATEGORY_LABEL: Record<TransactionCategory, string> = {
@@ -33,7 +34,6 @@ const CATEGORIES: Record<"CREDIT" | "DEBIT", TransactionCategory[]> = {
   DEBIT: ["UNCLASSIFIED", "CHEQUE_PAYMENT", "OTHER"],
 }
 const MODE_LABEL: Record<string, string> = { STATEMENT_IMPORT: "Bank statement import", MANUAL: "Manual entry" }
-const STATEMENT_COLUMNS = ["Date", "Description", "Transaction Type", "Credit Amount", "Debit Amount", "Running Balance", "Cheque Number", "Branch ID"]
 const MAX_SHOWN_ERRORS = 20
 
 interface BankData { account: ApiBankAccount | null; balance: ApiBalance | null; imports: ApiStatementImport[]; transactions: ApiTransaction[] }
@@ -52,6 +52,7 @@ export default function LiveBankAccountPage() {
   const { company, allow, reload, forecastInfo, today } = useAppState()
   const cid = company?.id ?? null
   const canEnter = allow("bank.enterData")
+  const canImport = allow("bank.importMonthly")
   const canConfigure = allow("bank.configure")
   const [data, setData] = useState<BankData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -191,15 +192,15 @@ export default function LiveBankAccountPage() {
 
       {manual
         ? <ManualEntryCard canEnter={canEnter} onBalance={() => setBalanceOpen(true)} onTransaction={() => setTransactionOpen(true)} />
-        : <StatementCard companyId={cid} account={account} imports={data.imports} canEnter={canEnter} onImported={changed} />}
+        : <MonthlyImportCard companyId={cid} account={account} imports={data.imports} today={today} canImport={canImport} onImported={changed} />}
 
       <Alert variant="info">
         <Info />
         <AlertTitle>How sales money reaches this account</AlertTitle>
         <AlertDescription>
           Cash sales are deposited into this account. Card sales first arrive in a separate card settlement account — not tracked in FlowLedger as a
-          company bank account — and are transferred here the next morning (Friday to Sunday settlements on Monday). Mark each one with its category so
-          Forecast vs Actual counts it as a sales receipt; cheque payments are marked as cheque payments.
+          company bank account — and are transferred here the next morning (Friday to Sunday settlements on Monday). Give each one its category in the monthly template so
+          Forecast vs Actual counts it as a sales receipt; cheque payments carry their cheque number, so the cheque shows as cleared.
         </AlertDescription>
       </Alert>
 
@@ -282,10 +283,29 @@ function ManualEntryCard({ canEnter, onBalance, onTransaction }: { canEnter: boo
   )
 }
 
-function StatementCard({ companyId, account, imports, canEnter, onImported }: {
-  companyId: string; account: ApiBankAccount; imports: ApiStatementImport[]; canEnter: boolean; onImported: () => void
+/** Builds the CSV template in the browser — no server needed. */
+function downloadBankTemplate() {
+  const url = URL.createObjectURL(new Blob([BANK_TEMPLATE_CSV], { type: "text/csv" }))
+  const a = Object.assign(document.createElement("a"), { href: url, download: BANK_TEMPLATE_FILE_NAME })
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const FORMAT_LABEL: Record<string, string> = { FLOWLEDGER_MONTHLY_CSV: "Monthly template", TRANSACTION_DETAILS_CSV: "Bank statement" }
+
+/**
+ * After each month ends, the Accountant (or a Finance Controller or Company Admin) fills the monthly
+ * template from the bank statement — every transaction with its category — and uploads it here.
+ * The current month is never imported; Forecast vs Actual compares up to the end of last month.
+ */
+function MonthlyImportCard({ companyId, account, imports, today, canImport, onImported }: {
+  companyId: string; account: ApiBankAccount; imports: ApiStatementImport[]; today: string; canImport: boolean; onImported: () => void
 }) {
   const input = useRef<HTMLInputElement>(null)
+  const months = useMemo(() => endedMonths(today), [today])
+  const imported = useMemo(() => new Set(imports.filter((i) => i.status === "IMPORTED" && i.fileFormat === "FLOWLEDGER_MONTHLY_CSV")
+    .map((i) => i.periodStart?.slice(0, 7))), [imports])
+  const [month, setMonth] = useState(() => months.find((m) => !imported.has(m)) ?? months[0])
   const [uploading, setUploading] = useState(false)
   const [removing, setRemoving] = useState<ApiStatementImport | null>(null)
   const [busy, setBusy] = useState(false)
@@ -295,10 +315,8 @@ function StatementCard({ companyId, account, imports, canEnter, onImported }: {
     setUploading(true)
     setRejected(null)
     try {
-      const result = await flowledger.uploadStatement(companyId, account.id, file)
-      toast.success("Statement imported", {
-        description: `${fmt.int(result.importedRowCount)} new · ${fmt.int(result.duplicateRowCount)} already imported · ${fmt.int(result.skippedRowCount)} zero-amount rows skipped`,
-      })
+      const result = await flowledger.uploadMonthlyTransactions(companyId, account.id, month, file)
+      toast.success(`${monthLabel(month)} imported`, { description: `${fmt.int(result.importedRowCount)} transactions, each with its category` })
       onImported()
     } catch (e) {
       const errors = e instanceof ApiError && Array.isArray(e.problem.errors) ? (e.problem.errors as StatementError[]) : []
@@ -315,97 +333,137 @@ function StatementCard({ companyId, account, imports, canEnter, onImported }: {
     setBusy(true)
     try {
       await flowledger.removeStatementImport(companyId, removing.id)
-      toast("Statement removed", { description: `${removing.filename}: its transactions and balance were deleted. You can upload it again.` })
+      toast("Import removed", { description: `${removing.filename}: its transactions and balance were deleted. You can upload the month again.` })
       setRemoving(null)
       onImported()
     } catch (e) {
-      toast.error("The statement was not removed", { description: errorMessage(e) })
+      toast.error("The import was not removed", { description: errorMessage(e) })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Bank statements</CardTitle>
-        <CardDescription>
-          Upload the bank's "Transaction details" statement as a CSV file with the columns {STATEMENT_COLUMNS.join(", ")}. Dates are month first
-          (9/30/2026). Every row is checked; a file with any error is not imported at all. Rows already imported are skipped, so overlapping
-          statements are safe.
-        </CardDescription>
-        {canEnter && (
-          <CardAction>
-            <input ref={input} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
-            <Button size="sm" disabled={uploading} onClick={() => input.current?.click()}><FileUp />{uploading ? "Importing…" : "Upload statement"}</Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      {rejected && (
-        <CardContent>
-          <Alert variant="destructive">
-            <AlertTriangle />
-            <AlertTitle>{rejected.file} was not imported</AlertTitle>
-            <AlertDescription>
-              <p>{rejected.message}</p>
-              {rejected.errors.length > 0 && (
-                <ul className="mt-1 list-disc pl-4 text-xs">
-                  {rejected.errors.slice(0, MAX_SHOWN_ERRORS).map((err, i) => (
-                    <li key={i}>{err.line != null && <>Line {err.line}{err.field && <>, {err.field}</>}: </>}{err.message}</li>
-                  ))}
-                  {rejected.errors.length > MAX_SHOWN_ERRORS && <li>…and {fmt.int(rejected.errors.length - MAX_SHOWN_ERRORS)} more</li>}
-                </ul>
-              )}
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      )}
-      <DataTable<ApiStatementImport>
-        rows={imports}
-        rowKey={(r) => r.id}
-        defaultSort={{ key: "at", dir: "desc" }}
-        maxHeight={320}
-        empty="No statements imported yet."
-        columns={[
-          { key: "at", header: "Uploaded", sortValue: (r) => r.importedAt, cell: (r) => <span className="whitespace-nowrap">{fmt.dateTime(colomboLocal(r.importedAt))}</span> },
-          { key: "file", header: "File", cell: (r) => <CellStack main={r.filename} sub={r.periodStart && r.periodEnd ? `${fmt.date(r.periodStart)} – ${fmt.date(r.periodEnd)}` : null} /> },
-          {
-            key: "status", header: "Status", cell: (r) => r.status === "IMPORTED" ? <StatusBadge status="Approved" label="Imported" />
-              : r.status === "REMOVED" ? <StatusBadge status="Cancelled" label="Removed" /> : <StatusBadge status="Rejected" label="Rejected" />,
-          },
-          {
-            key: "rows", header: "Rows", cell: (r) => r.status === "REMOVED"
-              ? <span className="text-muted-foreground text-xs">Removed {r.removedAt ? fmt.dateTime(colomboLocal(r.removedAt)) : ""} · its {fmt.int(r.importedRowCount)} transactions were deleted</span>
-              : r.status === "IMPORTED"
-                ? <span className="text-muted-foreground text-xs">{fmt.int(r.importedRowCount)} new · {fmt.int(r.duplicateRowCount)} already imported{r.skippedRowCount ? ` · ${fmt.int(r.skippedRowCount)} skipped` : ""}</span>
-                : <span className="text-muted-foreground text-xs">{r.errorSummary ?? "Invalid file"}</span>,
-          },
-          {
-            key: "act", header: "", cell: (r) => canEnter && r.status !== "REMOVED"
-              ? <Button variant="ghost" size="icon-sm" aria-label={`Remove ${r.filename}`} onClick={() => setRemoving(r)}><Trash2 /></Button>
-              : null,
-          },
-        ]}
-      />
+    <>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Monthly bank transactions</CardTitle>
+            <CardDescription>
+              After a month ends, copy that month's rows from the bank's "Transaction details" report into the template exactly as the bank
+              prints them, add each row's Category, and upload it. The current month is imported after it ends. Every row is checked; a file with
+              any error is not imported at all.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {canImport ? (
+              <>
+                <Field label="Month" help={imported.has(month) ? "Already imported — remove that import below to replace it." : BANK_TEMPLATE_LIMITS}>
+                  <Select value={month} onValueChange={(v) => { setMonth(v); setRejected(null) }}>
+                    <SelectTrigger className="w-56" aria-label="Month"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {months.map((m) => <SelectItem key={m} value={m}>{monthLabel(m)}{imported.has(m) ? " · imported" : ""}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <div className="flex flex-wrap gap-2">
+                  <input ref={input} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
+                  <Button size="sm" disabled={uploading || imported.has(month)} onClick={() => input.current?.click()}>
+                    <FileUp />{uploading ? "Importing…" : `Upload ${monthLabel(month)}`}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={downloadBankTemplate}><Download />Template</Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-muted-foreground flex items-center gap-1.5 text-sm"><Lock className="size-3.5" />Your role can view bank data but not import it.</p>
+            )}
+            {rejected && (
+              <Alert variant="destructive">
+                <AlertTriangle />
+                <AlertTitle>{rejected.file} was not imported</AlertTitle>
+                <AlertDescription>
+                  <p>{rejected.message}</p>
+                  {rejected.errors.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4 text-xs">
+                      {rejected.errors.slice(0, MAX_SHOWN_ERRORS).map((err, i) => (
+                        <li key={i}>{err.line != null && <>Line {err.line}{err.field && <>, {err.field}</>}: </>}{err.message}</li>
+                      ))}
+                      {rejected.errors.length > MAX_SHOWN_ERRORS && <li>…and {fmt.int(rejected.errors.length - MAX_SHOWN_ERRORS)} more</li>}
+                    </ul>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Template columns</CardTitle>
+            <CardDescription>Column names must match exactly (first row). Save from Excel as CSV UTF-8.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-hidden rounded-md border text-[13px]">
+              <div className="bg-muted text-muted-foreground grid grid-cols-[130px_1fr] gap-3 px-3 py-2 text-xs font-medium"><span>Column</span><span>Format</span></div>
+              {BANK_TEMPLATE_COLUMNS.map(([c, d]) => (
+                <div key={c} className="grid grid-cols-[130px_1fr] gap-3 border-t px-3 py-2"><span className="font-mono text-xs break-all">{c}</span><span>{d}</span></div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader><CardTitle>Import history</CardTitle><CardDescription>Each month is imported once. Remove an import to replace it.</CardDescription></CardHeader>
+        <DataTable<ApiStatementImport>
+          rows={imports}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "at", dir: "desc" }}
+          maxHeight={320}
+          empty="No bank transactions imported yet."
+          columns={[
+            { key: "at", header: "Uploaded", sortValue: (r) => r.importedAt, cell: (r) => <span className="whitespace-nowrap">{fmt.dateTime(colomboLocal(r.importedAt))}</span> },
+            {
+              key: "file", header: "File", cell: (r) => (
+                <CellStack main={r.filename} sub={[FORMAT_LABEL[r.fileFormat] ?? r.fileFormat, r.periodStart && r.periodEnd && `${fmt.date(r.periodStart)} – ${fmt.date(r.periodEnd)}`].filter(Boolean).join(" · ")} />
+              ),
+            },
+            {
+              key: "status", header: "Status", cell: (r) => r.status === "IMPORTED" ? <StatusBadge status="Approved" label="Imported" />
+                : r.status === "REMOVED" ? <StatusBadge status="Cancelled" label="Removed" /> : <StatusBadge status="Rejected" label="Rejected" />,
+            },
+            {
+              key: "rows", header: "Rows", cell: (r) => r.status === "REMOVED"
+                ? <span className="text-muted-foreground text-xs">Removed {r.removedAt ? fmt.dateTime(colomboLocal(r.removedAt)) : ""} · its {fmt.int(r.importedRowCount)} transactions were deleted</span>
+                : r.status === "IMPORTED"
+                  ? <span className="text-muted-foreground text-xs">{fmt.int(r.importedRowCount)} transactions{r.duplicateRowCount ? ` · ${fmt.int(r.duplicateRowCount)} already imported` : ""}</span>
+                  : <span className="text-muted-foreground text-xs">{r.errorSummary ?? "Invalid file"}</span>,
+            },
+            {
+              key: "act", header: "", cell: (r) => canImport && r.status !== "REMOVED"
+                ? <Button variant="ghost" size="icon-sm" aria-label={`Remove ${r.filename}`} onClick={() => setRemoving(r)}><Trash2 /></Button>
+                : null,
+            },
+          ]}
+        />
+      </Card>
       <Dialog open={!!removing} onOpenChange={(o) => !o && setRemoving(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove {removing?.filename}?</DialogTitle>
             <DialogDescription>
               {removing?.status === "IMPORTED"
-                ? <>The {fmt.int(removing.importedRowCount)} transactions this statement added and the balance it recorded are deleted, including any
-                  categories given to them; the Actual Bank Balance goes back to the one before. Transactions it found already imported belong to an
-                  earlier statement and stay. The statement stays in this list as removed, and you can upload it again.</>
+                ? <>The {fmt.int(removing.importedRowCount)} transactions this import added and the balance it recorded are deleted; the Actual Bank
+                  Balance goes back to the one before. The import stays in this list as removed, and you can upload the month again.</>
                 : <>The rejected file is marked as removed. Nothing was imported from it.</>}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRemoving(null)}>Cancel</Button>
-            <Button variant="destructive" disabled={busy} onClick={() => void remove()}>Remove statement</Button>
+            <Button variant="destructive" disabled={busy} onClick={() => void remove()}>Remove import</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </Card>
+    </>
   )
 }
 

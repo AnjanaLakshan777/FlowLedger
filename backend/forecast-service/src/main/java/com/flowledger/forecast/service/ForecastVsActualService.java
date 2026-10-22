@@ -83,9 +83,11 @@ public class ForecastVsActualService {
         });
         ForecastRun run = saved.run();
 
-        LocalDate today = LocalDate.now(clock);
+        // Bank transactions are imported once a month, after the month ends, so the current month has
+        // no actuals yet: the comparison runs up to the end of last month.
+        LocalDate actualsThrough = actualsThrough(LocalDate.now(clock));
         LocalDate start = run.getHorizonStartDate();
-        LocalDate end = run.getHorizonEndDate().isBefore(today) ? run.getHorizonEndDate() : today;
+        LocalDate end = run.getHorizonEndDate().isBefore(actualsThrough) ? run.getHorizonEndDate() : actualsThrough;
 
         // Before the horizon has started there is nothing to compare, and nothing to fetch.
         boolean started = !end.isBefore(start);
@@ -139,8 +141,14 @@ public class ForecastVsActualService {
                 .toList();
         Totals totals = totals(days, run.getInflowEstimateStatus(), unclassified);
         return new ForecastVsActualResponse(run.getId(), start, run.getHorizonEndDate(), run.getInflowEstimateStatus(),
+                actualsThrough,
                 days.stream().filter(Day::actualsAvailable).map(Day::date).reduce((first, last) -> last).orElse(null),
-                totals, days, warnings(run, days, today, unclassified));
+                totals, days, warnings(run, days, actualsThrough, unclassified));
+    }
+
+    /** The last day that can have actuals: the end of the month before today's. */
+    public static LocalDate actualsThrough(LocalDate today) {
+        return today.withDayOfMonth(1).minusDays(1);
     }
 
     private static Totals totals(List<Day> days, InflowEstimateStatus inflowStatus, List<Transaction> unclassified) {
@@ -156,20 +164,20 @@ public class ForecastVsActualService {
                 unclassified.size(), ForecastService.sum(unclassified));
     }
 
-    private static List<ForecastWarning> warnings(ForecastRun run, List<Day> days, LocalDate today,
+    private static List<ForecastWarning> warnings(ForecastRun run, List<Day> days, LocalDate actualsThrough,
                                                   List<Transaction> unclassified) {
         List<ForecastWarning> warnings = new ArrayList<>();
         if (run.getInflowEstimateStatus() == InflowEstimateStatus.INSUFFICIENT_HISTORY) {
             warnings.add(new ForecastWarning(ForecastWarning.INSUFFICIENT_HISTORY,
                     "This forecast has no estimated sales inflows, so inflows cannot be compared."));
         }
-        // Today is left out: its statement is normally not imported until tomorrow.
+        // The current month is left out: its bank transactions are imported after it ends.
         long missingPastDays = days.stream()
-                .filter(day -> !day.actualsAvailable() && day.date().isBefore(today))
+                .filter(day -> !day.actualsAvailable() && !day.date().isAfter(actualsThrough))
                 .count();
         if (missingPastDays > 0) {
             warnings.add(new ForecastWarning(ForecastWarning.ACTUALS_INCOMPLETE, missingPastDays
-                    + " past day(s) are not covered by an imported bank statement and have no actual values."));
+                    + " day(s) up to the end of last month have no imported bank transactions and no actual values."));
         }
         if (!unclassified.isEmpty()) {
             warnings.add(ForecastWarning.unclassified(unclassified.size(), ForecastService.sum(unclassified),

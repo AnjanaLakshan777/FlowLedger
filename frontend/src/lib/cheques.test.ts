@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import type { Cheque } from "@/data/types"
-import { chequeCategoryText, toCheque, upsertCheque, validateCheque, type ChequeInput } from "./cheques"
+import type { BankTransaction, Cheque } from "@/data/types"
+import { chequeCategoryText, clearingOf, clearings, paymentState, toCheque, upsertCheque, validateCheque, type ChequeInput } from "./cheques"
 import { buildForecast } from "./forecast"
 
 const TODAY = "2026-10-10"
@@ -70,5 +70,26 @@ describe("adding and editing cheques", () => {
     expect(f.days.find((d) => d.date === "2026-10-26")!.cheque_out).toBe(0)
     expect(f.days.find((d) => d.date === "2026-10-28")!.cheque_out).toBe(9_800_000)
     expect(f.days.reduce((t, d) => t + d.cheque_out, 0)).toBe(9_800_000)
+  })
+})
+
+describe("cleared cheques from imported bank transactions", () => {
+  const txn = (over: Partial<BankTransaction>): BankTransaction => ({
+    txn_id: "t", txn_date: "2026-09-04", value_date: "", description: "CHQ PAID", reference: "", amount: -9_800_000, txn_type: "",
+    match_status: "Matched", matched_record: "", confidence: null, note: "", balance_after: null, category: "CHEQUE_PAYMENT", cheque_no: "000004535", ...over,
+  })
+  const cheque = { ...existing[0], expected_clear_date: "2026-09-03" }
+
+  it("matches a cheque payment by number, ignoring the bank's leading zeros", () => {
+    const cleared = clearings([txn({})])
+    expect(clearingOf(cheque, cleared)).toEqual({ date: "2026-09-04", amount: 9_800_000 })
+    expect(paymentState(cheque, TODAY, cleared)).toBe("Cleared")
+  })
+
+  it("ignores other categories, credits and cancelled cheques", () => {
+    expect(clearingOf(cheque, clearings([txn({ category: "OTHER" })]))).toBeUndefined()
+    expect(clearingOf(cheque, clearings([txn({ amount: 9_800_000 })]))).toBeUndefined()
+    expect(clearingOf({ ...cheque, status: "Cancelled" }, clearings([txn({})]))).toBeUndefined()
+    expect(paymentState(cheque, TODAY, clearings([]))).toBe("Past clearing date")
   })
 })

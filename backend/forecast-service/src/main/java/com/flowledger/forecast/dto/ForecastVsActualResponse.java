@@ -9,9 +9,11 @@ import java.util.UUID;
 
 /**
  * A saved forecast run compared with what actually happened in the bank, by actual transaction
- * date. Actual values are null for days not covered by an imported statement (including future
- * days), never zero. Differences are actual minus forecast.
+ * date. Actual values are null for days not covered by an imported statement and for every day of
+ * the current month (bank transactions are imported monthly), never zero. Differences are actual
+ * minus forecast.
  *
+ * @param actualsThrough  the last day that can have actuals: the end of last month
  * @param comparedThrough last day with actual values, or null if none yet
  */
 public record ForecastVsActualResponse(
@@ -19,6 +21,7 @@ public record ForecastVsActualResponse(
         LocalDate horizonStartDate,
         LocalDate horizonEndDate,
         InflowEstimateStatus inflowEstimateStatus,
+        LocalDate actualsThrough,
         LocalDate comparedThrough,
         Totals totals,
         List<Day> days,

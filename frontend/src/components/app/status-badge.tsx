@@ -11,6 +11,8 @@ const MAP: Record<string, { variant: Variant; label?: string; icon?: "check" | "
   // cheques: never marked paid automatically; past the clearing date they stay Scheduled
   Scheduled: { variant: "outline" },
   "Past clearing date": { variant: "attention" },
+  // the bank's imported transactions show the cheque paid
+  Cleared: { variant: "soft", icon: "check" },
   Cancelled: { variant: "muted" },
   Bounced: { variant: "destructive", icon: "x" },
   // general

@@ -15,7 +15,7 @@ import java.util.List;
 public record ParsedStatement(String format, List<StatementLine> lines, boolean newestFirst,
                               List<StatementError> errors) {
 
-    static ParsedStatement failed(String format, List<StatementError> errors) {
+    public static ParsedStatement failed(String format, List<StatementError> errors) {
         return new ParsedStatement(format, List.of(), false, List.copyOf(errors));
     }
 

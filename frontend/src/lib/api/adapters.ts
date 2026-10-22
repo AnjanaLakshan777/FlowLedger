@@ -79,6 +79,7 @@ export function toTransaction(t: ApiTransaction): BankTransaction {
     amount: t.direction === "CREDIT" ? t.amount : -t.amount,
     txn_type: CALENDAR_TYPE[t.category] ?? categoryText(t.category, t.otherDescription),
     match_status: "Matched", matched_record: "", confidence: null, note: "", balance_after: t.runningBalance,
+    category: t.category, cheque_no: t.chequeNumber,
   }
 }
 

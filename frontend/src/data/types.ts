@@ -17,6 +17,8 @@ export interface BankTransaction {
   txn_id: string; txn_date: string; value_date: string; description: string; reference: string
   /** Credit is positive, debit is negative. */
   amount: number; txn_type: string; match_status: MatchStatus; matched_record: string; confidence: number | null; note: string; balance_after: number | null
+  /** Live data only: the classification and the cheque number, used to show cheques as cleared. */
+  category?: string; cheque_no?: string | null
 }
 export interface DailySale {
   sales_date: string; cash_sales: number; card_sales: number; total: number; entered_at: string; entered_by: string; entry_type: "Standard" | "Backdated" | "Imported"; note: string

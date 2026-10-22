@@ -16,19 +16,22 @@ import { PageHeader } from "@/components/app/page-header"
 import { SearchInput } from "@/components/app/search-input"
 import { StatusBadge } from "@/components/app/status-badge"
 import type { Cheque } from "@/data/types"
-import { CHEQUE_CATEGORIES, chequeCategoryText, isPastClearingDate, isUpcoming, paymentState } from "@/lib/cheques"
+import { CHEQUE_CATEGORIES, chequeCategoryText, clearingOf, clearings, isPastClearingDate, isUpcoming, paymentState } from "@/lib/cheques"
 import { fmt, sum } from "@/lib/format"
 
 /**
- * A cheque is a future payment, forecast on its expected clearing date. There is no bank-based clearing or bounce
- * detection yet, so a cheque is never marked paid: past its clearing date it stays Scheduled and is shown as
- * "Past clearing date". Bounced exists only in the demonstration data.
+ * A cheque is a future payment, forecast on its expected clearing date. It shows as Cleared once the month's imported
+ * bank transactions include a cheque payment with its number; past its clearing date without one it stays Scheduled
+ * and is shown as "Past clearing date". Bounced exists only in the demonstration data.
  */
-type Show = "upcoming" | "past" | "Cancelled" | "Bounced" | "all"
-const SHOW: [Show, string][] = [["upcoming", "Upcoming payments"], ["past", "Past clearing date"], ["Cancelled", "Cancelled"], ["Bounced", "Bounced"], ["all", "All cheques"]]
+type Show = "upcoming" | "past" | "cleared" | "Cancelled" | "Bounced" | "all"
+const SHOW: [Show, string][] = [
+  ["upcoming", "Upcoming payments"], ["past", "Past clearing date, not cleared"], ["cleared", "Cleared"], ["Cancelled", "Cancelled"], ["Bounced", "Bounced"], ["all", "All cheques"],
+]
 
 export default function ChequesPage() {
-  const { cheques, kpis, allow, today, mode, forecastInfo } = useAppState()
+  const { cheques, kpis, allow, today, mode, forecastInfo, transactions } = useAppState()
+  const cleared = useMemo(() => clearings(transactions), [transactions])
   const notReady = useNotReady(["cheques"])
   const [params, setParams] = useSearchParams()
   const [addOpen, setAddOpen] = useState(false)
@@ -48,10 +51,13 @@ export default function ChequesPage() {
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase()
     return cheques.filter((c) =>
-      (show === "all" || (show === "upcoming" ? isUpcoming(c, today) : show === "past" ? isPastClearingDate(c, today) : c.status === show)) &&
+      (show === "all" || (show === "upcoming" ? isUpcoming(c, today) && !clearingOf(c, cleared)
+        : show === "past" ? isPastClearingDate(c, today) && !clearingOf(c, cleared)
+          : show === "cleared" ? !!clearingOf(c, cleared) : c.status === show)) &&
       (cat === "all" || c.category === cat) && (!from || c.expected_clear_date >= from) && (!to || c.expected_clear_date <= to) &&
       (!s || [c.cheque_no, c.payee, c.notes, c.other_description ?? "", fmt.amt(c.amount)].join(" ").toLowerCase().includes(s)))
-  }, [cheques, show, cat, q, from, to, today])
+  }, [cheques, show, cat, q, from, to, today, cleared])
+  const clearedCount = cheques.filter((c) => clearingOf(c, cleared)).length
 
   return (
     <>
@@ -64,13 +70,15 @@ export default function ChequesPage() {
         <Info />
         <AlertTitle>Forecast on the expected clearing date</AlertTitle>
         <AlertDescription>
-          The forecast deducts each scheduled cheque on its expected clearing date only. FlowLedger never marks a cheque paid: after that
-          date it stays Scheduled, shown as past its clearing date. Recording a cheque never changes the Actual Bank Balance.
+          The forecast deducts each scheduled cheque on its expected clearing date only. A cheque shows as Cleared when the month's imported
+          bank transactions include a cheque payment with its number; until then, after that date it is shown as past its clearing date.
+          Recording a cheque never changes the Actual Bank Balance.
         </AlertDescription>
       </Alert>
       <StatRow items={[
         { label: "Upcoming cheque payments", value: kpis.upcomingCount, sub: fmt.lkr0(kpis.upcomingAmount) },
         { label: "Clearing in the next 7 days", value: kpis.cheques7dCount, sub: fmt.lkr0(kpis.cheques7dAmount) },
+        ...(mode === "live" ? [{ label: "Cleared · from bank data", value: clearedCount, sub: "Imported monthly" }] : []),
         mode === "live"
           ? { label: "Expected cheque outflows · forecast", value: fmt.lkr0(kpis.forecastOutflow), sub: forecastInfo ? `${fmt.date(forecastInfo.run.horizonStartDate)} – ${fmt.date(forecastInfo.run.horizonEndDate)}` : "No forecast yet" }
           : { label: "Expected cheque outflows · 12 weeks", value: fmt.lkr0(kpis.forecastOutflow), sub: "Deducted on expected clearing dates" },
@@ -116,12 +124,16 @@ export default function ChequesPage() {
             { key: "date", header: "Issue date", sortValue: (r) => r.cheque_date, cell: (r) => <span className="whitespace-nowrap">{fmt.short(r.cheque_date)}</span> },
             { key: "clears", header: "Expected clearing", sortValue: (r) => r.expected_clear_date, cell: (r) => <span className="whitespace-nowrap">{fmt.day(r.expected_clear_date)}</span> },
             {
-              key: "status", header: "Payment", sortValue: (r) => paymentState(r, today), cell: (r) => (
-                <CellStack main={<StatusBadge status={paymentState(r, today)} />} sub={isUpcoming(r, today) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : isPastClearingDate(r, today) ? "Not confirmed paid" : undefined} />
-              ),
+              key: "status", header: "Payment", sortValue: (r) => paymentState(r, today, cleared), cell: (r) => {
+                const clearing = clearingOf(r, cleared)
+                const sub = clearing
+                  ? `Cleared ${fmt.short(clearing.date)}${clearing.amount !== r.amount ? ` · bank paid ${fmt.amt(clearing.amount)}` : ""}`
+                  : isUpcoming(r, today) ? `Forecast on ${fmt.short(r.expected_clear_date)}` : isPastClearingDate(r, today) ? "Not in the bank data yet" : undefined
+                return <CellStack main={<StatusBadge status={paymentState(r, today, cleared)} />} sub={sub} />
+              },
             },
             {
-              key: "act", header: "", cell: (r) => (canEdit && isUpcoming(r, today) ? (
+              key: "act", header: "", cell: (r) => (canEdit && isUpcoming(r, today) && !clearingOf(r, cleared) ? (
                 <div className="flex gap-1.5">
                   <Button variant="outline" size="sm" onClick={() => setEditing(r)}>Edit</Button>
                   <Button variant="outline" size="sm" onClick={() => setCancelling(r)}>Cancel</Button>
