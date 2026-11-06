@@ -17,13 +17,13 @@ import { StatRow } from "@/components/app/kpi-card"
 import { PageHeader } from "@/components/app/page-header"
 import { Segmented } from "@/components/app/segmented"
 import { StatusBadge } from "@/components/app/status-badge"
-import { colomboLocal } from "@/lib/api/adapters"
+import { colomboLocal, personName } from "@/lib/api/adapters"
 import { ApiError, errorMessage } from "@/lib/api/client"
 import { flowledger, type ApiSalesImport, type ApiSalesImportDetail, type ApiSalesImportOverview, type ApiSalesImportRow } from "@/lib/api/flowledger"
 import { fmt } from "@/lib/format"
 import {
   TEMPLATE_COLUMNS, TEMPLATE_CSV, TEMPLATE_FILE_NAME, UPLOAD_LIMITS, approvalBlock, coverageDays, defaultSelection, importStatusLabel,
-  invalidReason, rowDateText, rowIssue, rowStatusLabel, uploaderLabel,
+  invalidReason, rowDateText, rowIssue, rowStatusLabel,
 } from "@/lib/sales-import"
 import { cn } from "@/lib/utils"
 
@@ -46,6 +46,17 @@ export default function LiveHistoricalImportPage() {
   const { company, currentUser, reload } = useAppState()
   const cid = company?.id ?? null
   const me = currentUser?.user_id ?? null
+  // Real names for who uploaded and decided each import; "Another user" until they load or if the list is unavailable.
+  const [names, setNames] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    if (!cid) return
+    let current = true
+    flowledger.memberNames(cid)
+      .then((members) => { if (current) setNames(new Map(members.map((m) => [m.userId, m.fullName]))) })
+      .catch(() => { /* names stay unknown */ })
+    return () => { current = false }
+  }, [cid])
+  const who = useCallback((userId: string | null) => personName(userId, me, names), [me, names])
 
   const [overview, setOverview] = useState<ApiSalesImportOverview | null>(null)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -204,7 +215,7 @@ export default function LiveHistoricalImportPage() {
                     <div className="flex items-center gap-3 rounded-md border p-3">
                       <div className="bg-primary/10 text-primary grid size-9 shrink-0 place-items-center rounded-md"><FileSpreadsheet className="size-[18px]" /></div>
                       <CellStack className="flex-1" main={<b className="font-semibold break-all">{batch.fileName}</b>}
-                        sub={`${fmt.int(batch.rowCount)} rows · uploaded ${fmt.dateTime(local(batch.uploadedAt))} by ${uploaderLabel(batch.uploadedBy, me)}`} />
+                        sub={`${fmt.int(batch.rowCount)} rows · uploaded ${fmt.dateTime(local(batch.uploadedAt))} by ${who(batch.uploadedBy)}`} />
                       <StatusBadge status={importStatusLabel(batch.status)} />
                     </div>
                   )}
@@ -274,7 +285,7 @@ export default function LiveHistoricalImportPage() {
                     <CardContent className="grid gap-3">
                       {batch.status === "APPROVED" ? (
                         <>
-                          <Alert variant="info"><CheckCircle2 /><AlertTitle>Approved by {uploaderLabel(batch.approvedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
+                          <Alert variant="info"><CheckCircle2 /><AlertTitle>Approved by {who(batch.approvedBy)}</AlertTitle>
                             <AlertDescription>{fmt.dateTimeFull(local(batch.approvedAt))}. {fmt.int(batch.importedRowCount ?? 0)} rows recorded as daily sales{batch.excludedRowCount ? `, ${batch.excludedRowCount} invalid rows left out` : ""}.{batch.approvalNote ? ` Note: ${batch.approvalNote}` : ""}</AlertDescription></Alert>
                           {canApprove && (
                             <div className="flex flex-wrap items-center gap-2">
@@ -284,13 +295,13 @@ export default function LiveHistoricalImportPage() {
                           )}
                         </>
                       ) : batch.status === "REVERSED" ? (
-                        <Alert><Undo2 /><AlertTitle>Reversed by {uploaderLabel(batch.reversedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
+                        <Alert><Undo2 /><AlertTitle>Reversed by {who(batch.reversedBy)}</AlertTitle>
                           <AlertDescription>
-                            {fmt.dateTimeFull(local(batch.reversedAt))}. Reason: {batch.reversalReason}. Its daily sales were deleted; it had been approved
+                            {fmt.dateTimeFull(local(batch.reversedAt))}. Reason: {batch.reversalReason}. Its daily sales were deleted; it had been approved by {who(batch.approvedBy)}
                             {batch.approvedAt ? ` ${fmt.dateTimeFull(local(batch.approvedAt))}` : ""}. Upload a corrected file for these dates.
                           </AlertDescription></Alert>
                       ) : batch.status === "REJECTED" ? (
-                        <Alert><XCircle /><AlertTitle>Rejected by {uploaderLabel(batch.rejectedBy, me) === "You" ? "you" : "a Finance Controller"}</AlertTitle>
+                        <Alert><XCircle /><AlertTitle>Rejected by {who(batch.rejectedBy)}</AlertTitle>
                           <AlertDescription>{fmt.dateTimeFull(local(batch.rejectedAt))}. Reason: {batch.rejectionReason}. Upload a corrected file to try again.</AlertDescription></Alert>
                       ) : batch.status === "INVALID" ? (
                         <p className="text-muted-foreground text-sm">Correct the file and upload it again; an invalid file cannot be approved.</p>
@@ -358,11 +369,11 @@ export default function LiveHistoricalImportPage() {
                 { key: "file", header: "File", cell: (r) => r.fileName },
                 { key: "period", header: "Period", cell: (r) => (r.periodStart && r.periodEnd ? fmt.range(r.periodStart, r.periodEnd) : "—") },
                 { key: "rows", header: "Rows", numeric: true, cell: (r) => fmt.int(r.rowCount) },
-                { key: "uploaded", header: "Uploaded", cell: (r) => <CellStack main={fmt.dateTime(local(r.uploadedAt))} sub={uploaderLabel(r.uploadedBy, me)} /> },
+                { key: "uploaded", header: "Uploaded", cell: (r) => <CellStack main={fmt.dateTime(local(r.uploadedAt))} sub={who(r.uploadedBy)} /> },
                 { key: "status", header: "Status", cell: (r) => <StatusBadge status={importStatusLabel(r.status)} /> },
                 { key: "by", header: "Decided by", cell: (r) => {
                   const at = r.reversedAt ?? r.approvedAt ?? r.rejectedAt
-                  return at ? <CellStack main={uploaderLabel(r.reversedBy ?? r.approvedBy ?? r.rejectedBy, me)} sub={fmt.dateTime(local(at))} /> : "—"
+                  return at ? <CellStack main={who(r.reversedBy ?? r.approvedBy ?? r.rejectedBy)} sub={fmt.dateTime(local(at))} /> : "—"
                 } },
               ]}
             />
