@@ -67,6 +67,8 @@ export interface AppState {
   /** Today in Asia/Colombo (live) or the demo data's fixed date. */
   today: string; now: string
   signedIn: boolean; role: Role | null; roleLabel: string; currentUser: User | null
+  /** An active platform SYSTEM_ADMIN (live data): manages reference data shared by every company, such as holidays. */
+  platformAdmin: boolean
   /** True while a stored session is being checked with the identity service. */
   sessionLoading: boolean
   company: { id: string; name: string } | null
@@ -232,6 +234,7 @@ function useDemoStateValue(initialUserId: string | null): AppState {
   return {
     mode: "demo", today: seed.TODAY, now: seed.NOW,
     signedIn: !!currentUser, sessionLoading: false, role, roleLabel: role ? ROLE_LABEL[role] : "", currentUser,
+    platformAdmin: false,
     company: { id: "demo", name: companyName }, companies: [],
     allow, canPage, accessLog, users, imports,
     bankAccount, dailySales, cheques, transactions, forecast, forecastInfo: null, forecastAutoUpdate: AUTO_IDLE, forecastInputs, kpis,

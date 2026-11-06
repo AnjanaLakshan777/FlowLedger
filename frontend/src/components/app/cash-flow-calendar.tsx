@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import {
-  AlertTriangle, Banknote, Check, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, FileText, Pencil, Plus, TrendingUp, XCircle, type LucideIcon,
+  AlertTriangle, Banknote, Check, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, FileText, Landmark, Pencil, Plus, TrendingUp, XCircle, type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -14,11 +14,14 @@ import {
 import { isUpcoming } from "@/lib/cheques"
 import { addDays, fmt } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import type { ApiHoliday } from "@/lib/api/flowledger"
+import { holidayKinds, isBankHoliday } from "@/lib/holidays"
 import { useAppState } from "./app-state"
 import { CancelChequeDialog, ChequeFormDialog } from "./cheque-form-dialog"
 import { StatRow } from "./kpi-card"
 import { Segmented } from "./segmented"
 import { StatusBadge } from "./status-badge"
+import { useHolidays } from "./use-holidays"
 
 interface Indicator { key: string; icon: LucideIcon; label: string; color: string; dot: string }
 const IND: Record<string, Indicator> = {
@@ -57,6 +60,8 @@ export function CashFlowCalendar({ initialSelected, initialMode = "month" }: { i
     () => buildCalendar({ today: TODAY, actualBalance, transactions, forecastDays: forecast.days }),
     [forecast.days, transactions, actualBalance, TODAY]
   )
+  // whole weeks of the first and last month, so holidays also show on the greyed days around the calendar's data
+  const holidays = useHolidays(cal.first ? weekStart(monthStart(cal.first)) : undefined, cal.last ? addDays(cal.last, 42) : undefined)
   const start = initialSelected ?? TODAY
   const [nav, setNav] = useState<CalendarNav>({ mode: initialMode, anchor: start, selected: start })
   const [focusDate, setFocusDate] = useState<string | null>(null)
@@ -106,10 +111,10 @@ export function CashFlowCalendar({ initialSelected, initialMode = "month" }: { i
       <Legend />
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         {nav.mode === "month"
-          ? <MonthGrid anchor={nav.anchor} cal={cal} selected={nav.selected} onSelect={(d) => go({ type: "select", date: d })} onKey={onKey} cellRef={cellRef} />
-          : <WeekView days={weekDays} cal={cal} selected={nav.selected} onSelect={(d) => go({ type: "select", date: d })} onKey={onKey} cellRef={cellRef} />}
+          ? <MonthGrid anchor={nav.anchor} cal={cal} holidays={holidays} selected={nav.selected} onSelect={(d) => go({ type: "select", date: d })} onKey={onKey} cellRef={cellRef} />
+          : <WeekView days={weekDays} cal={cal} holidays={holidays} selected={nav.selected} onSelect={(d) => go({ type: "select", date: d })} onKey={onKey} cellRef={cellRef} />}
         <DayDetail
-          iso={nav.selected} day={day} cheques={cheques} canEdit={canEdit}
+          iso={nav.selected} day={day} holidays={holidays.get(nav.selected)} cheques={cheques} canEdit={canEdit}
           onAdd={() => setForm({ open: true, cheque: null })}
           onEdit={(c) => setForm({ open: true, cheque: c })}
           onCancel={setCancelling}
@@ -133,12 +138,13 @@ function Legend() {
       ))}
       <li className="inline-flex items-center gap-1.5"><span className="bg-card size-3 rounded-[3px] border" aria-hidden />Actual (bank data)</li>
       <li className="inline-flex items-center gap-1.5"><span className="size-3 rounded-[3px] border border-dashed" aria-hidden />Forecast</li>
+      <li className="inline-flex items-center gap-1.5"><Landmark className="text-holiday size-3.5" aria-hidden />Bank holiday (Central Bank list; weekends not marked)</li>
     </ul>
   )
 }
 
 interface ViewProps {
-  cal: ReturnType<typeof buildCalendar>; selected: string
+  cal: ReturnType<typeof buildCalendar>; holidays: Map<string, ApiHoliday[]>; selected: string
   onSelect: (d: string) => void; onKey: (e: KeyboardEvent, d: string) => void; cellRef: (d: string) => (el: HTMLButtonElement | null) => void
 }
 
@@ -177,7 +183,7 @@ const cellClass = (day: CalendarDay | undefined, selected: boolean) => cn(
   day && !selected && "hover:border-ring",
 )
 
-function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProps & { anchor: string }) {
+function MonthGrid({ anchor, cal, holidays, selected, onSelect, onKey, cellRef }: ViewProps & { anchor: string }) {
   const { today: TODAY } = useAppState()
   const rows = monthGrid(anchor)
   const month = monthStart(anchor).slice(0, 7)
@@ -198,11 +204,13 @@ function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProp
             {row.map((d) => {
               const day = cal.days.get(d)
               const ind = indicators(day)
+              const hol = holidays.get(d)
               return (
                 <td key={d} className="p-0 align-top">
                   <button
                     ref={cellRef(d)} type="button" disabled={!day}
-                    tabIndex={d === selected ? 0 : -1} aria-pressed={d === selected} aria-current={d === TODAY ? "date" : undefined} aria-label={describeDay(day, d)}
+                    tabIndex={d === selected ? 0 : -1} aria-pressed={d === selected} aria-current={d === TODAY ? "date" : undefined}
+                    aria-label={[describeDay(day, d), hol?.map((h) => h.name).join(", ")].filter(Boolean).join(". ")}
                     onClick={() => onSelect(d)} onKeyDown={(e) => onKey(e, d)}
                     className={cn(cellClass(day, d === selected), "grid h-16 content-between p-1 sm:h-24 sm:p-2 lg:h-28", !d.startsWith(month) && "opacity-45")}
                   >
@@ -210,10 +218,17 @@ function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProp
                       <span className={cn("text-xs font-medium tabular sm:text-sm", d === TODAY && "bg-primary text-primary-foreground grid size-5 place-items-center rounded-full sm:size-6")}>
                         {Number(d.slice(8))}
                       </span>
-                      {day?.basis === "actual"
-                        ? <span className="text-muted-foreground hidden text-[10px] font-medium uppercase lg:inline">Actual</span>
-                        : null}
+                      {isBankHoliday(hol)
+                        ? <Landmark className="text-holiday size-3 shrink-0 sm:size-3.5" aria-hidden />
+                        : day?.basis === "actual"
+                          ? <span className="text-muted-foreground hidden text-[10px] font-medium uppercase lg:inline">Actual</span>
+                          : null}
                     </span>
+                    {hol && (
+                      <span className="text-holiday hidden truncate text-[11px] leading-tight font-medium sm:block" title={hol.map((h) => h.name).join(", ")}>
+                        {hol[0].name}{hol.length > 1 ? ` +${hol.length - 1}` : ""}
+                      </span>
+                    )}
                     <CellBalance day={day} className="truncate text-[10px] tabular sm:text-sm lg:text-[15px]" />
                     {ind.length > 0 ? (
                       <>
@@ -232,7 +247,7 @@ function MonthGrid({ anchor, cal, selected, onSelect, onKey, cellRef }: ViewProp
   )
 }
 
-function WeekView({ days, cal, selected, onSelect, onKey, cellRef }: ViewProps & { days: string[] }) {
+function WeekView({ days, cal, holidays, selected, onSelect, onKey, cellRef }: ViewProps & { days: string[] }) {
   const { today: TODAY } = useAppState()
   const recs = days.map((d) => cal.days.get(d)).filter(Boolean) as CalendarDay[]
   const actual = recs.filter((r) => r.basis === "actual")
@@ -270,6 +285,11 @@ function WeekView({ days, cal, selected, onSelect, onKey, cellRef }: ViewProps &
                   <b className="text-[13px] font-semibold">{weekdayLabel(d)}</b>
                   <span className={cn("text-muted-foreground tabular", d === TODAY && "text-primary dark:text-chart-2 font-semibold")}>{d === TODAY ? "Today" : lkDate(d)}</span>
                 </span>
+                {holidays.get(d)?.map((h) => (
+                  <span key={h.name} className="text-holiday flex min-w-0 items-center gap-1 font-medium">
+                    {h.bankHoliday && <Landmark className="size-3.5 shrink-0" aria-hidden />}<span className="truncate">{h.name}</span>
+                  </span>
+                ))}
                 {day ? (
                   <>
                     <CellBalance day={day} withLabel className="text-[15px] tabular" />
@@ -291,8 +311,8 @@ function WeekView({ days, cal, selected, onSelect, onKey, cellRef }: ViewProps &
 const shortTitle = (e: CalendarEvent) =>
   e.kind === "cheque" && e.status === "expected" ? e.title.replace(/^Cheque #\d+ · /, "Chq ") : e.title.replace(/^Expected /, "")
 
-function DayDetail({ iso, day, cheques, canEdit, onAdd, onEdit, onCancel, onGoTo }: {
-  iso: string; day?: CalendarDay; cheques: Cheque[]; canEdit: boolean
+function DayDetail({ iso, day, holidays, cheques, canEdit, onAdd, onEdit, onCancel, onGoTo }: {
+  iso: string; day?: CalendarDay; holidays?: ApiHoliday[]; cheques: Cheque[]; canEdit: boolean
   onAdd: () => void; onEdit: (c: Cheque) => void; onCancel: (c: Cheque) => void; onGoTo: (d: string) => void
 }) {
   const { today: TODAY } = useAppState()
@@ -301,11 +321,22 @@ function DayDetail({ iso, day, cheques, canEdit, onAdd, onEdit, onCancel, onGoTo
   // written on this date but deducted on another (their clearing date) — shown for context, not counted here
   const writtenHere = cheques.filter((c) => isUpcoming(c, TODAY) && c.cheque_date === iso && c.expected_clear_date !== iso)
   const addButton = canEdit && <Button size="sm" onClick={onAdd}><Plus />Add Cheque Payment</Button>
+  const holidayList = holidays?.length ? (
+    <ul className="grid gap-1.5" aria-label="Holidays">
+      {holidays.map((h) => (
+        <li key={h.name} className="grid gap-1">
+          <span className="text-holiday flex items-center gap-1.5 text-sm font-medium">{h.bankHoliday && <Landmark className="size-4 shrink-0" aria-hidden />}{h.name}</span>
+          <span className="flex flex-wrap gap-1">{holidayKinds(h).map((k) => <Badge key={k} variant="outline">{k}</Badge>)}</span>
+        </li>
+      ))}
+    </ul>
+  ) : null
 
   if (!day) {
     return (
       <aside aria-label={`Details for ${heading}`} className="grid content-start gap-3 rounded-lg border p-4 text-sm">
         <h3 className="text-[15px] font-semibold">{heading}</h3>
+        {holidayList}
         <p className="text-muted-foreground">No data for this date.</p>
       </aside>
     )
@@ -333,6 +364,7 @@ function DayDetail({ iso, day, cheques, canEdit, onAdd, onEdit, onCancel, onGoTo
         <h3 className="text-[15px] font-semibold">{heading}{iso === TODAY && <span className="text-muted-foreground font-normal"> · Today</span>}</h3>
         {actual ? <Badge variant="soft"><Check />Actual</Badge> : <Badge variant="dashed"><TrendingUp />Forecast</Badge>}
       </div>
+      {holidayList}
       <StatRow items={items} />
       {day.closing < 0 && (
         <Alert variant="destructive">

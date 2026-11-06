@@ -75,6 +75,13 @@ export interface ForecastWarning {
   message: string
 }
 
+/** A Sri Lankan holiday from the Central Bank's list: B bank, P public, M mercantile; Poya days marked. Weekends are not listed. */
+export interface ApiHoliday {
+  date: string; name: string; bankHoliday: boolean; publicHoliday: boolean; mercantileHoliday: boolean; poyaDay: boolean
+}
+
+export interface ApiHolidayYear { year: number; holidayCount: number; sourceName: string; importedAt: string }
+
 export interface ForecastRunSummary {
   id: string; bankAccountId: string; runStatus: string; asOfAt: string; horizonStartDate: string; horizonEndDate: string
   openingBalance: number; openingBalanceAsOf: string; currency: string; balanceStale: boolean
@@ -260,6 +267,15 @@ export const flowledger = {
 
   forecastRuns: (c: string) => api<ForecastRunSummary[]>(`${forecast(c)}/forecast-runs`),
   forecastRun: (c: string, runId: string) => api<ForecastRun>(`${forecast(c)}/forecast-runs/${runId}`),
+  /** Sri Lankan holidays (Central Bank list) between from and to, inclusive. */
+  holidays: (c: string, from: string, to: string) => api<ApiHoliday[]>(`${forecast(c)}/holidays?from=${from}&to=${to}`),
+  holidayYears: (c: string) => api<ApiHolidayYear[]>(`${forecast(c)}/holidays/years`),
+  /** Platform SYSTEM_ADMIN only: replaces the year's whole list from a CSV (date,name,codes). */
+  uploadHolidays: (c: string, year: number, file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return api<ApiHoliday[]>(`${forecast(c)}/holidays/${year}`, { method: "PUT", form })
+  },
   createForecast: (c: string) => api<ForecastRun>(`${forecast(c)}/forecast-runs`, { method: "POST" }),
   forecastVsActual: (c: string, runId: string) => api<ForecastVsActual>(`${forecast(c)}/forecast-runs/${runId}/forecast-vs-actual`),
 }

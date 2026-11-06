@@ -50,6 +50,14 @@ public class CompanyAccessVerifier {
         }
     }
 
+    // An active platform SYSTEM_ADMIN, for reference data shared by every company (the holiday calendar).
+    public void verifyPlatformAdmin(Jwt user, UUID companyId) {
+        MembershipAuthorization authorization = fetchMembership(user, companyId);
+        if (!authorization.allowed() || !authorization.platformAdmin()) {
+            throw new CompanyAccessDeniedException();
+        }
+    }
+
     // The user's own token is forwarded so identity-service identifies the user from a token it
     // verifies itself, rather than from an ID this service passes along.
     private MembershipAuthorization fetchMembership(Jwt user, UUID companyId) {

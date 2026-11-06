@@ -1164,8 +1164,8 @@ confirmed.
   `expected_cheque_count` on days; `source_version` on run cheques. Expected
   inflow columns are nullable (schema v1: NOT NULL default 0), because
   "not estimated" must not be stored as zero.
-- Not created yet: the bank and sales projection tables, `calendar_holidays`
-  (no verified holiday source), and an audit or outbox table (schema section
+- Not created yet: the bank and sales projection tables, and an audit or
+  outbox table (schema section
   9 removes them from the MVP). `forecast_cheques` and `processed_events`
   were added later (see Cheque Event Consumer); runs still read their inputs
   through the APIs.
@@ -1535,6 +1535,38 @@ when a forecast screen opens.
   logged and skipped, and the job continues. The job logs how many runs were
   made, unchanged, and not made.
 
+### Holiday Calendar
+
+Requested by the product owner (2026-11-06): the cash-flow calendar shows
+Sri Lankan bank holidays and the other holidays (Poya days, Deepawali,
+Sinhala & Tamil New Year, Christmas, and the rest).
+
+- Source: the Central Bank of Sri Lanka's yearly "Bank Holidays" page
+  (B bank, P public, M mercantile). No free API gives bank holidays
+  separately (checked 2026-10-22: Calendarific, holidayapi.com, and Google's
+  public calendar mark public holidays only; Nager.Date has no Sri Lanka),
+  so the list is imported from the Central Bank yearly.
+- Migration `V8__create_calendar_holidays.sql` creates `calendar_holidays`
+  (schema section 7.9, simplified: one row per named holiday with B/P/M and
+  Poya flags instead of `holiday_type`, no Sinhala or Tamil names; unique
+  date and name) and seeds the Central Bank's 2026 (26) and 2027 (25)
+  lists. Saturdays and Sundays are bank holidays but are not stored.
+- API under `/api/v1/forecast/companies/{companyId}/holidays`: `GET`
+  (`from`, `to`, at most 800 days) and `GET /years`, for any member of the
+  company (all four roles); `PUT /{year}` with a CSV (`date,name,codes`,
+  ISO dates in that year, codes such as `B. P. M.`), which replaces the
+  year's whole list, for an active platform `SYSTEM_ADMIN` only (the list is
+  shared by every company). One invalid row refuses the whole file (400
+  with every problem). A Poya day is a name containing "Full Moon Poya Day"
+  that does not start with "Day following".
+- The calendar marks bank holidays with an icon and shows holiday names in
+  the month and week views and the day details (with Bank, Public,
+  Mercantile, and Poya labels). Users & Settings has a Holidays tab: years
+  loaded for everyone, and the upload with a template for platform
+  administrators.
+- Holidays do not change forecasts: the treatment of deposits and cheque
+  clearing on bank holidays is still open (section 13).
+
 ### Forecast Use of Historical Sales
 
 - Recorded sales (approved imports and manual daily sales) reach the
@@ -1845,7 +1877,9 @@ The following must be researched or agreed before implementation:
 - Exact tenant model and tenant-isolation implementation.
 - Database ownership, schema design, and migration strategy for each service.
 - Bank data import format and future bank integration/API approach.
-- Verified official source and update process for Sri Lankan bank holidays.
+- Who keeps the yearly Central Bank holiday list up to date in production,
+  and how special bank holidays announced during the year are added (the
+  upload replaces the whole year, so the corrected full list is uploaded).
 - Forecast estimation algorithm and its validation against historical data.
 - Business rules for forecast treatment of bank holidays.
 - Outbox publishing for bank-integration-service, alerting and a replay

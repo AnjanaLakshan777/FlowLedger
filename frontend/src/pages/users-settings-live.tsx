@@ -21,6 +21,7 @@ import { Field } from "@/components/app/field"
 import { PageHeader } from "@/components/app/page-header"
 import { SearchInput } from "@/components/app/search-input"
 import { StatusBadge } from "@/components/app/status-badge"
+import { HolidaysPanel } from "@/components/app/holidays-panel"
 import type { Role } from "@/data/types"
 import { colomboLocal } from "@/lib/api/adapters"
 import { ApiError, errorMessage } from "@/lib/api/client"
@@ -134,6 +135,7 @@ export default function LiveUsersSettingsPage() {
           <TabsTrigger value="roles">Roles & permissions</TabsTrigger>
           <TabsTrigger value="company">Company</TabsTrigger>
           <TabsTrigger value="bank">Bank account</TabsTrigger>
+          <TabsTrigger value="holidays">Holidays</TabsTrigger>
           {isAdmin && <TabsTrigger value="access">Access changes</TabsTrigger>}
         </TabsList>
 
@@ -302,6 +304,10 @@ export default function LiveUsersSettingsPage() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        <TabsContent value="holidays">
+          <HolidaysPanel />
         </TabsContent>
 
         {isAdmin && (

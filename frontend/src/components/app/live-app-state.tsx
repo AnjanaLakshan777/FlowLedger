@@ -243,6 +243,7 @@ function useLiveStateValue(): AppState {
   return {
     mode: "live", today, now: colomboLocal(new Date()),
     signedIn: !!me, sessionLoading, role, roleLabel: membership ? ROLE_NAME[membership.companyRole] : "", currentUser,
+    platformAdmin: me?.platformRole === "SYSTEM_ADMIN",
     company, companies: (me?.memberships ?? []).map((m) => ({ id: m.companyId, name: m.companyName, roleLabel: ROLE_NAME[m.companyRole] })),
     allow, canPage, accessLog: [], users: [], imports: [],
     bankAccount: bank.account, dailySales: sales, cheques, transactions: bank.transactions,
