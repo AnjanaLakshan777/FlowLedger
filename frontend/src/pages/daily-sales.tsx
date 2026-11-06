@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
-import { AlertTriangle, CalendarDays, Check, Clock, History, Info, Lock, PanelLeftClose, PanelLeftOpen, Pencil } from "lucide-react"
+import { AlertTriangle, CalendarDays, CalendarOff, Check, Clock, History, Info, Lock, PanelLeftClose, PanelLeftOpen, Pencil } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useAppState } from "@/components/app/app-state"
@@ -50,31 +52,40 @@ export default function DailySalesPage() {
   const [cash, setCash] = useState("")
   const [card, setCard] = useState("")
   const [note, setNote] = useState("")
+  // A company holiday is a day the company was closed: saved with no sales, so the day is not shown as missing.
+  const [holiday, setHoliday] = useState(false)
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
-  const cashV = parseAmount(cash), cardV = parseAmount(card)
+  const cashV = holiday ? 0 : parseAmount(cash), cardV = holiday ? 0 : parseAmount(card)
   const total = (Number.isNaN(cashV) ? 0 : cashV ?? 0) + (Number.isNaN(cardV) ? 0 : cardV ?? 0)
   const existing = dailySales.find((s) => s.sales_date === date)
   const backdated = !!date && daysBetween(date, TODAY) >= 2
   // the sales service keeps one record per date; a recorded day is changed with Correct in the list
   const locked = live && !!existing
 
-  const reset = () => { setCash(""); setCard(""); setNote(""); setErrors({}) }
+  const reset = () => { setCash(""); setCard(""); setNote(""); setHoliday(false); setErrors({}) }
+  const markHoliday = (on: boolean) => {
+    setHoliday(on)
+    if (on) { setCash(""); setCard("") }
+    setErrors((e) => ({ ...e, cash: undefined, card: undefined }))
+  }
   const save = async () => {
     const e = {
       date: !date ? "Choose the sales date." : date > TODAY ? "Sales date can't be in the future." : undefined,
       cash: cashV == null ? "Enter cash sales (0 if none)." : Number.isNaN(cashV) || cashV < 0 ? "Enter a positive amount." : undefined,
       card: cardV == null ? "Enter card payments (0 if none)." : Number.isNaN(cardV) || cardV < 0 ? "Enter a positive amount." : undefined,
     }
+    if (!holiday && !e.cash && !e.card && cashV! + cardV! <= 0) e.cash = "Cash and card can't both be zero. Tick Company holiday if the company was closed."
     setErrors(e)
     if (e.date || e.cash || e.card) return
     setSaving(true)
     const err = await actions.saveSale({
       sales_date: date, cash_sales: cashV!, card_sales: cardV!, total: cashV! + cardV!, entered_at: NOW, entered_by: currentUser?.name ?? "",
-      entry_type: backdated ? "Backdated" : "Standard", note,
+      entry_type: backdated ? "Backdated" : "Standard", note, company_holiday: holiday,
     })
     setSaving(false)
     if (err) return void toast.error(`Sales for ${fmt.date(date)} were not saved`, { description: err })
-    toast.success(`Sales for ${fmt.date(date)} ${existing ? "updated" : "saved"}`, { description: fmt.lkr(cashV! + cardV!) })
+    if (holiday) toast.success(`${fmt.date(date)} saved as a company holiday`, { description: "No sales recorded for this day." })
+    else toast.success(`Sales for ${fmt.date(date)} ${existing ? "updated" : "saved"}`, { description: fmt.lkr(cashV! + cardV!) })
     reset()
   }
   const next = (id: string) => (e: KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById(id)?.focus() } }
@@ -86,10 +97,13 @@ export default function DailySalesPage() {
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase()
     return dailySales.filter((r) =>
-      (month === "all" || r.sales_date.startsWith(month)) && (type === "all" || r.entry_type === type) &&
-      (!s || [r.sales_date, fmt.day(r.sales_date), r.entered_by, r.note, fmt.amt(r.total)].join(" ").toLowerCase().includes(s)))
+      (month === "all" || r.sales_date.startsWith(month)) && (type === "all" || (type === "holiday" ? !!r.company_holiday : r.entry_type === type)) &&
+      (!s || [r.sales_date, fmt.day(r.sales_date), r.entered_by, r.note, fmt.amt(r.total), r.company_holiday ? "company holiday" : ""].join(" ").toLowerCase().includes(s)))
   }, [dailySales, q, month, type])
   const last7 = dailySales.filter((r) => r.sales_date > addDays(TODAY, -8))
+  // The daily average is over the days the company was open.
+  const open7 = last7.filter((r) => !r.company_holiday)
+  const closed7 = last7.length - open7.length
 
   return (
     <>
@@ -132,12 +146,13 @@ export default function DailySalesPage() {
                 <Input id="ds-date" type="date" max={TODAY} value={date} disabled={!canEdit} onChange={(e) => setDate(e.target.value)} onKeyDown={next("ds-cash")} aria-invalid={!!errors.date || undefined} />
               </Field>
               {backdated && <Badge variant="outline"><Clock />Backdated entry</Badge>}
+              <HolidayCheckbox id="ds-holiday" checked={holiday} onChange={markHoliday} disabled={!canEdit || locked} />
               <div className="grid gap-3.5 sm:grid-cols-2">
                 <Field label="Cash sales (LKR)" htmlFor="ds-cash" error={errors.cash}>
-                  <MoneyInput id="ds-cash" value={cash} onChange={setCash} disabled={!canEdit} invalid={!!errors.cash} onKeyDown={next("ds-card")} />
+                  <MoneyInput id="ds-cash" value={cash} onChange={setCash} disabled={!canEdit || holiday} invalid={!!errors.cash} onKeyDown={next("ds-card")} />
                 </Field>
                 <Field label="Card payments (LKR)" htmlFor="ds-card" error={errors.card}>
-                  <MoneyInput id="ds-card" value={card} onChange={setCard} disabled={!canEdit} invalid={!!errors.card} onKeyDown={next("ds-save")} />
+                  <MoneyInput id="ds-card" value={card} onChange={setCard} disabled={!canEdit || holiday} invalid={!!errors.card} onKeyDown={next("ds-save")} />
                 </Field>
               </div>
               <div className="bg-muted flex justify-between gap-3 rounded-md border px-3.5 py-2.5 text-[13px]">
@@ -151,7 +166,7 @@ export default function DailySalesPage() {
               )}
               <p className="text-muted-foreground flex items-center gap-1.5 text-xs"><Clock className="size-3.5" />Entry timestamp: recorded on save (now {fmt.dateTimeFull(NOW)})</p>
               <div className="flex gap-2">
-                <Button id="ds-save" onClick={() => void save()} disabled={!canEdit || locked || saving}><Check />{saving ? "Saving…" : existing && !live ? "Update entry" : "Save entry"}</Button>
+                <Button id="ds-save" onClick={() => void save()} disabled={!canEdit || locked || saving}><Check />{saving ? "Saving…" : existing && !live ? "Update entry" : holiday ? "Save as holiday" : "Save entry"}</Button>
                 <Button variant="outline" onClick={reset} disabled={!canEdit}>Clear</Button>
               </div>
             </CardContent>
@@ -159,13 +174,15 @@ export default function DailySalesPage() {
           <Card>
             <CardHeader>
               <CardTitle>Last 7 entered days</CardTitle>
-              <CardDescription>Sales by sales date</CardDescription>
+              <CardDescription>
+                Sales by sales date{closed7 > 0 && `; the daily average leaves out ${closed7 === 1 ? "1 company holiday" : `${closed7} company holidays`}`}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <StatRow items={[
                 { label: "Cash", value: fmt.compact(sum(last7, (r) => r.cash_sales)) },
                 { label: "Card", value: fmt.compact(sum(last7, (r) => r.card_sales)) },
-                { label: "Daily avg", value: fmt.compact(last7.length ? sum(last7, (r) => r.total) / last7.length : 0) },
+                { label: "Daily avg", value: fmt.compact(open7.length ? sum(open7, (r) => r.total) / open7.length : 0) },
               ]} />
             </CardContent>
           </Card>
@@ -191,11 +208,12 @@ export default function DailySalesPage() {
               <SelectContent>{MONTHS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={type} onValueChange={setType}>
-              <SelectTrigger aria-label="Entry type" className="w-40"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Entry type" className="w-48"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All entries</SelectItem>
                 <SelectItem value="Backdated">Backdated only</SelectItem>
                 <SelectItem value="Imported">Historical imports only</SelectItem>
+                <SelectItem value="holiday">Company holidays only</SelectItem>
               </SelectContent>
             </Select>
           </CardContent>
@@ -216,7 +234,8 @@ export default function DailySalesPage() {
                 key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (
                   <div>
                   <div className="flex flex-wrap items-center gap-1">
-                    {r.entry_type === "Standard" ? <span className="text-muted-foreground">On time</span> : <StatusBadge status={r.entry_type} />}
+                    {r.company_holiday && <Badge variant="outline"><CalendarOff />Company holiday</Badge>}
+                    {r.entry_type !== "Standard" ? <StatusBadge status={r.entry_type} /> : !r.company_holiday && <span className="text-muted-foreground">On time</span>}
                     {r.corrected_at && (live && r.id
                       ? <button type="button" onClick={() => setHistory(r)} className="focus-visible:ring-ring/50 rounded-md outline-none focus-visible:ring-[3px]" aria-label={`Why sales for ${fmt.date(r.sales_date)} were corrected`}>
                           <Badge variant="outline" className="cursor-pointer hover:bg-accent"><History />Corrected</Badge>
@@ -255,28 +274,34 @@ function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose:
   const [cash, setCash] = useState("")
   const [card, setCard] = useState("")
   const [reason, setReason] = useState("")
+  const [holiday, setHoliday] = useState(false)
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     if (!sale) return
-    setCash(sale.cash_sales.toFixed(2)); setCard(sale.card_sales.toFixed(2)); setReason(""); setErrors({})
+    setCash(sale.cash_sales.toFixed(2)); setCard(sale.card_sales.toFixed(2)); setReason(""); setHoliday(!!sale.company_holiday); setErrors({})
   }, [sale])
+  const markHoliday = (on: boolean) => {
+    setHoliday(on)
+    if (on) { setCash("0.00"); setCard("0.00") }
+    setErrors((e) => ({ ...e, cash: undefined, card: undefined }))
+  }
 
   async function save(s: DailySale) {
-    const cashV = parseAmount(cash), cardV = parseAmount(card)
+    const cashV = holiday ? 0 : parseAmount(cash), cardV = holiday ? 0 : parseAmount(card)
     const e = {
       cash: cashV == null || Number.isNaN(cashV) || cashV < 0 ? "Enter cash sales (0 if none)." : undefined,
       card: cardV == null || Number.isNaN(cardV) || cardV < 0 ? "Enter card payments (0 if none)." : undefined,
       reason: !reason.trim() ? "Say why the amounts are corrected, for example Cash count was wrong." : undefined,
     }
-    if (!e.cash && !e.card && cashV! + cardV! <= 0) e.cash = "Cash and card can't both be zero."
+    if (!holiday && !e.cash && !e.card && cashV! + cardV! <= 0) e.cash = "Cash and card can't both be zero. Tick Company holiday if the company was closed."
     setErrors(e)
     if (e.cash || e.card || e.reason) return
     setSaving(true)
-    const err = await actions.correctSale(s, cashV!, cardV!, reason.trim())
+    const err = await actions.correctSale(s, cashV!, cardV!, reason.trim(), holiday)
     setSaving(false)
     if (err) return setErrors({ form: err })
-    toast.success(`Sales for ${fmt.date(s.sales_date)} corrected`, { description: fmt.lkr(cashV! + cardV!) })
+    toast.success(`Sales for ${fmt.date(s.sales_date)} corrected`, { description: holiday ? "Marked as a company holiday" : fmt.lkr(cashV! + cardV!) })
     onClose()
   }
 
@@ -287,16 +312,17 @@ function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose:
           <DialogHeader>
             <DialogTitle>Correct sales for {fmt.date(sale.sales_date)}</DialogTitle>
             <DialogDescription>
-              Recorded {fmt.lkr(sale.total)} (cash {fmt.amt(sale.cash_sales)}, card {fmt.amt(sale.card_sales)}). The sales date can't change.
+              Recorded {saleAmounts(sale.cash_sales, sale.card_sales, sale.company_holiday)}. The sales date can't change.
               The correction and its reason are kept in the audit history.
             </DialogDescription>
           </DialogHeader>
+          <HolidayCheckbox id="cs-holiday" checked={holiday} onChange={markHoliday} />
           <div className="grid gap-3.5 sm:grid-cols-2">
             <Field label="Cash sales (LKR)" htmlFor="cs-cash" error={errors.cash}>
-              <MoneyInput id="cs-cash" value={cash} onChange={setCash} invalid={!!errors.cash} />
+              <MoneyInput id="cs-cash" value={cash} onChange={setCash} disabled={holiday} invalid={!!errors.cash} />
             </Field>
             <Field label="Card payments (LKR)" htmlFor="cs-card" error={errors.card}>
-              <MoneyInput id="cs-card" value={card} onChange={setCard} invalid={!!errors.card} />
+              <MoneyInput id="cs-card" value={card} onChange={setCard} disabled={holiday} invalid={!!errors.card} />
             </Field>
           </div>
           <Field label="Reason" htmlFor="cs-reason" error={errors.reason}>
@@ -326,7 +352,7 @@ function CorrectionHistoryDialog({ sale, onClose }: { sale: DailySale | null; on
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Corrections for {fmt.date(sale.sales_date)}</DialogTitle>
-            <DialogDescription>Each correction with its reason, newest first. Now {saleAmounts(sale.cash_sales, sale.card_sales)}.</DialogDescription>
+            <DialogDescription>Each correction with its reason, newest first. Now {saleAmounts(sale.cash_sales, sale.card_sales, sale.company_holiday)}.</DialogDescription>
           </DialogHeader>
           <CorrectionHistoryList sale={sale} />
           <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
@@ -336,7 +362,21 @@ function CorrectionHistoryDialog({ sale, onClose }: { sale: DailySale | null; on
   )
 }
 
-const saleAmounts = (cash: number, card: number) => `${fmt.lkr(cash + card)} (cash ${fmt.amt(cash)}, card ${fmt.amt(card)})`
+const saleAmounts = (cash: number, card: number, holiday?: boolean) =>
+  holiday ? "a company holiday (no sales)" : `${fmt.lkr(cash + card)} (cash ${fmt.amt(cash)}, card ${fmt.amt(card)})`
+
+/** Marks a day the company was closed; it is saved with no sales. */
+function HolidayCheckbox({ id, checked, onChange, disabled }: { id: string; checked: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
+  return (
+    <div className="flex items-start gap-2 rounded-md border px-3 py-2.5">
+      <Checkbox id={id} checked={checked} onCheckedChange={(v) => onChange(v === true)} disabled={disabled} className="mt-0.5" />
+      <div className="grid gap-0.5">
+        <Label htmlFor={id} className="font-normal">Company holiday</Label>
+        <span className="text-muted-foreground text-xs">The company was closed this day. It is saved with no sales.</span>
+      </div>
+    </div>
+  )
+}
 
 /** A day's corrections, newest first, loaded from the audit history. A day never corrected needs no request. */
 function CorrectionHistoryList({ sale, className }: { sale: DailySale; className?: string }) {
@@ -372,7 +412,9 @@ function CorrectionHistoryList({ sale, className }: { sale: DailySale; className
           <span className="text-muted-foreground text-xs">
             Corrected by {personName(c.correctedBy, currentUser?.user_id ?? null, names)} · {fmt.dateTimeFull(colomboLocal(c.correctedAt))}
           </span>
-          <span className="tabular text-xs">{saleAmounts(c.cashSalesBefore, c.cardSalesBefore)} → {saleAmounts(c.cashSalesAfter, c.cardSalesAfter)}</span>
+          <span className="tabular text-xs">
+            {saleAmounts(c.cashSalesBefore, c.cardSalesBefore, c.companyHolidayBefore)} → {saleAmounts(c.cashSalesAfter, c.cardSalesAfter, c.companyHolidayAfter)}
+          </span>
         </li>
       ))}
     </ol>

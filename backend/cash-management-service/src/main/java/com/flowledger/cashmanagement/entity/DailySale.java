@@ -26,6 +26,9 @@ import java.util.UUID;
  * A day entered by hand can be corrected (amounts only); the version guards against two
  * corrections overwriting each other. Days from an approved import are corrected by reversing
  * the import.
+ * <p>
+ * A company holiday is a day the company was closed: recorded by hand with no sales, so the day is
+ * known rather than missing.
  */
 @Entity
 @Table(name = "daily_sales")
@@ -61,6 +64,9 @@ public class DailySale {
     @Column(name = "recorded_at", nullable = false, updatable = false)
     private Instant recordedAt;
 
+    @Column(name = "company_holiday", nullable = false)
+    private boolean companyHoliday;
+
     @Column(name = "updated_by")
     private UUID updatedBy;
 
@@ -75,19 +81,26 @@ public class DailySale {
     // Amounts are validated to at most two decimal places, so setScale never has to round.
     public DailySale(UUID companyId, LocalDate saleDate, BigDecimal cashSalesAmount, BigDecimal cardSalesAmount,
                      EntrySource entrySource, UUID recordedBy) {
+        this(companyId, saleDate, cashSalesAmount, cardSalesAmount, false, entrySource, recordedBy);
+    }
+
+    public DailySale(UUID companyId, LocalDate saleDate, BigDecimal cashSalesAmount, BigDecimal cardSalesAmount,
+                     boolean companyHoliday, EntrySource entrySource, UUID recordedBy) {
         this.companyId = companyId;
         this.saleDate = saleDate;
         this.cashSalesAmount = cashSalesAmount.setScale(2);
         this.cardSalesAmount = cardSalesAmount.setScale(2);
+        this.companyHoliday = companyHoliday;
         this.entrySource = entrySource;
         this.recordedBy = recordedBy;
     }
 
-    // Returns false when the amounts are unchanged, so nothing is saved or audited.
-    public boolean correct(BigDecimal cash, BigDecimal card, UUID actor, Instant now) {
-        if (cashSalesAmount.compareTo(cash) == 0 && cardSalesAmount.compareTo(card) == 0) {
+    // Returns false when the amounts and the holiday mark are unchanged, so nothing is saved or audited.
+    public boolean correct(BigDecimal cash, BigDecimal card, boolean holiday, UUID actor, Instant now) {
+        if (cashSalesAmount.compareTo(cash) == 0 && cardSalesAmount.compareTo(card) == 0 && companyHoliday == holiday) {
             return false;
         }
+        this.companyHoliday = holiday;
         this.cashSalesAmount = cash.setScale(2);
         this.cardSalesAmount = card.setScale(2);
         this.updatedBy = actor;
@@ -100,6 +113,7 @@ public class DailySale {
         snapshot.put("saleDate", saleDate.toString());
         snapshot.put("cashSalesAmount", cashSalesAmount.toPlainString());
         snapshot.put("cardSalesAmount", cardSalesAmount.toPlainString());
+        snapshot.put("companyHoliday", companyHoliday);
         snapshot.put("version", version);
         return snapshot;
     }

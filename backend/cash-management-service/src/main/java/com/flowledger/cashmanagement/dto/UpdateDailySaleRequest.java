@@ -29,6 +29,13 @@ public record UpdateDailySaleRequest(
         String reason,
 
         @NotNull(message = "version is required")
-        Integer version
+        Integer version,
+
+        // Optional: true marks the day as a company holiday (both amounts zero); false or missing removes the mark.
+        Boolean companyHoliday
 ) {
+
+    public boolean holiday() {
+        return Boolean.TRUE.equals(companyHoliday);
+    }
 }

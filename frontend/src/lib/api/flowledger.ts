@@ -11,6 +11,8 @@ export interface CurrentUser {
 export interface ApiDailySale {
   id: string; companyId: string; saleDate: string; cashSalesAmount: number; cardSalesAmount: number; totalSalesAmount: number
   entrySource: string; recordedBy: string; recordedAt: string
+  /** A day the company was closed; both amounts are zero. */
+  companyHoliday?: boolean
   /** Set once the day has been corrected. */
   updatedBy: string | null; updatedAt: string | null; version: number
   /** The reason given with the latest correction (lists only). */
@@ -20,6 +22,8 @@ export interface ApiDailySale {
 export interface ApiSaleCorrection {
   correctedBy: string; correctedAt: string; reason: string
   cashSalesBefore: number; cardSalesBefore: number; cashSalesAfter: number; cardSalesAfter: number
+  /** The company-holiday mark before and after the correction. */
+  companyHolidayBefore?: boolean; companyHolidayAfter?: boolean
 }
 
 export interface ApiBankAccount {
@@ -208,13 +212,14 @@ export const flowledger = {
   accessChanges: (c: string) => api<ApiAccessChange[]>(`${identity}/companies/${c}/access-changes`),
 
   sales: (c: string) => api<ApiDailySale[]>(`${cash(c)}/sales`),
-  recordSale: (c: string, saleDate: string, cashSalesAmount: number, cardSalesAmount: number) =>
-    api<ApiDailySale>(`${cash(c)}/sales`, { method: "POST", json: { saleDate, cashSalesAmount, cardSalesAmount } }),
+  /** A company holiday is a closed day: both amounts are zero. */
+  recordSale: (c: string, saleDate: string, cashSalesAmount: number, cardSalesAmount: number, companyHoliday = false) =>
+    api<ApiDailySale>(`${cash(c)}/sales`, { method: "POST", json: { saleDate, cashSalesAmount, cardSalesAmount, companyHoliday } }),
   /** Who corrected a day, when, why, and the amounts before and after; newest first. */
   saleCorrections: (c: string, id: string) => api<ApiSaleCorrection[]>(`${cash(c)}/sales/${id}/corrections`),
-  /** Corrects a day entered by hand (amounts only), with a reason for the audit history. */
-  correctSale: (c: string, id: string, cashSalesAmount: number, cardSalesAmount: number, reason: string, version: number) =>
-    api<ApiDailySale>(`${cash(c)}/sales/${id}`, { method: "PUT", json: { cashSalesAmount, cardSalesAmount, reason, version } }),
+  /** Corrects a day entered by hand (amounts and the company-holiday mark), with a reason for the audit history. */
+  correctSale: (c: string, id: string, cashSalesAmount: number, cardSalesAmount: number, reason: string, version: number, companyHoliday = false) =>
+    api<ApiDailySale>(`${cash(c)}/sales/${id}`, { method: "PUT", json: { cashSalesAmount, cardSalesAmount, reason, version, companyHoliday } }),
 
   salesImports: (c: string) => api<ApiSalesImportOverview>(`${cash(c)}/sales-imports`),
   salesImport: (c: string, id: string) => api<ApiSalesImportDetail>(`${cash(c)}/sales-imports/${id}`),

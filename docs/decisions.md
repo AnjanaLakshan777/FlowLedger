@@ -771,9 +771,19 @@ before production.
   see the sales; Daily Sales opens it from the "Corrected" badge.
 - One record per company per sale date, holding `cashSalesAmount` and
   `cardSalesAmount` (`NUMERIC(19,2)`, each at least 0, at most two decimal
-  places). Their total must be greater than 0. A second record for the same
+  places). Their total must be greater than 0, except on a company holiday
+  (below). A second record for the same
   date returns 409, from the schema's `UNIQUE (company_id, sale_date)`. This
   is separate from the duplicate-date rule for historical import approval.
+- Company holidays (requested by the product owner, 2026-11-06): a day the
+  company was closed is recorded by hand with `companyHoliday: true` and
+  both amounts 0 (migration `V4__add_company_holiday_to_daily_sales.sql`),
+  so the day is known rather than missing. A holiday with any sales, or a day
+  without the mark and without sales, gives 400. A correction can set or
+  remove the mark; the audit history keeps it before and after. Sales history
+  lists the day with zero sales, as an approved import's zero-sales day is
+  already listed, so the forecast's previous-year pattern reads it as a day
+  without sales. Imports have no holiday mark.
 - Past sale dates are accepted. Sale dates after today in `Asia/Colombo` are
   rejected with 400 (confirmed rule, section 4).
 - The company comes from the request path, the recording user from the access
@@ -1767,7 +1777,10 @@ retry; the frontend never falls back to demonstration data.
   identity-service's member names, with "(you)" for the signed-in user;
   "Another user" only when the name cannot be loaded. Daily
   Sales has a "Correct" action (Accountant and above) on days entered by
-  hand, asking for the amounts and a reason, and marks corrected days;
+  hand, asking for the amounts and a reason, and marks corrected days; a
+  "Company holiday" tick on the entry and the correction saves a closed day
+  with no sales, shown with a "Company holiday" badge and left out of the
+  last-7-days daily average;
   Historical Sales Import has "Reverse import" on approved imports (Finance
   Controller and Company Admin).
 - Bank transactions have no value date in the API.

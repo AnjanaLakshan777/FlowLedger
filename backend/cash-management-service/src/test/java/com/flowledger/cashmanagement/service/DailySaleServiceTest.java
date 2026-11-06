@@ -82,7 +82,7 @@ class DailySaleServiceTest {
     }
 
     private static CreateDailySaleRequest request(LocalDate saleDate) {
-        return new CreateDailySaleRequest(saleDate, new BigDecimal("50000.00"), BigDecimal.ZERO);
+        return new CreateDailySaleRequest(saleDate, new BigDecimal("50000.00"), BigDecimal.ZERO, null);
     }
 
     private static Jwt user() {

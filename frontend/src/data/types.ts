@@ -26,6 +26,8 @@ export interface DailySale {
   id?: string; version?: number; corrected_at?: string | null
   /** Why it was last corrected. */
   correction_reason?: string | null
+  /** The company was closed this day: recorded with no sales, so the day is not missing. */
+  company_holiday?: boolean
 }
 export type ChequeCategory = "Supplier Payment" | "Salary" | "Tax" | "Other Expenses"
 /**

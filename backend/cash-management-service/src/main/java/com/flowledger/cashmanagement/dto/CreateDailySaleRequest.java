@@ -23,6 +23,13 @@ public record CreateDailySaleRequest(
         @DecimalMin(value = "0.00", message = "cardSalesAmount must not be negative")
         @Digits(integer = 17, fraction = 2,
                 message = "cardSalesAmount must have at most 17 digits before and 2 after the decimal point")
-        BigDecimal cardSalesAmount
+        BigDecimal cardSalesAmount,
+
+        // Optional: true records a day the company was closed, with both amounts zero.
+        Boolean companyHoliday
 ) {
+
+    public boolean holiday() {
+        return Boolean.TRUE.equals(companyHoliday);
+    }
 }

@@ -44,7 +44,9 @@ public class AuditEventStore {
                                (before_data ->> 'cashSalesAmount')::numeric AS cash_before,
                                (before_data ->> 'cardSalesAmount')::numeric AS card_before,
                                (after_data ->> 'cashSalesAmount')::numeric AS cash_after,
-                               (after_data ->> 'cardSalesAmount')::numeric AS card_after
+                               (after_data ->> 'cardSalesAmount')::numeric AS card_after,
+                               coalesce((before_data ->> 'companyHoliday')::boolean, false) AS holiday_before,
+                               coalesce((after_data ->> 'companyHoliday')::boolean, false) AS holiday_after
                         FROM cash_management_audit_events
                         WHERE company_id = ? AND entity_type = 'DAILY_SALE' AND entity_id = ?
                           AND action = 'DAILY_SALE_CORRECTED'
@@ -53,7 +55,8 @@ public class AuditEventStore {
                 (rs, n) -> new DailySaleCorrectionResponse(rs.getObject("actor_user_id", UUID.class),
                         rs.getTimestamp("occurred_at").toInstant(), rs.getString("reason"),
                         rs.getBigDecimal("cash_before"), rs.getBigDecimal("card_before"),
-                        rs.getBigDecimal("cash_after"), rs.getBigDecimal("card_after")),
+                        rs.getBigDecimal("cash_after"), rs.getBigDecimal("card_after"),
+                        rs.getBoolean("holiday_before"), rs.getBoolean("holiday_after")),
                 companyId, saleId);
     }
 

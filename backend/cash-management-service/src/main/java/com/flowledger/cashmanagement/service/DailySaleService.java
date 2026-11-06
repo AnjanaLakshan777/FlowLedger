@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.EnumSet;
@@ -79,16 +80,14 @@ public class DailySaleService {
         if (request.saleDate().isAfter(LocalDate.now(clock))) {
             throw new InvalidDailySaleException("saleDate", "saleDate must not be in the future");
         }
-        if (request.cashSalesAmount().signum() == 0 && request.cardSalesAmount().signum() == 0) {
-            throw new InvalidDailySaleException("totalSalesAmount",
-                    "cashSalesAmount and cardSalesAmount must not both be zero");
-        }
+        checkAmounts(request.cashSalesAmount(), request.cardSalesAmount(), request.holiday());
 
         DailySale sale = new DailySale(
                 companyId,
                 request.saleDate(),
                 request.cashSalesAmount(),
                 request.cardSalesAmount(),
+                request.holiday(),
                 EntrySource.UI,
                 UUID.fromString(user.getSubject())
         );
@@ -113,10 +112,7 @@ public class DailySaleService {
      */
     public DailySaleResponse updateDailySale(Jwt user, UUID companyId, UUID saleId, UpdateDailySaleRequest request) {
         companyAccessVerifier.verify(user, companyId, EDIT_ROLES);
-        if (request.cashSalesAmount().signum() == 0 && request.cardSalesAmount().signum() == 0) {
-            throw new InvalidDailySaleException("totalSalesAmount",
-                    "cashSalesAmount and cardSalesAmount must not both be zero");
-        }
+        checkAmounts(request.cashSalesAmount(), request.cardSalesAmount(), request.holiday());
         UUID actor = UUID.fromString(user.getSubject());
 
         return writeTransaction.execute(status -> {
@@ -129,7 +125,8 @@ public class DailySaleService {
                 throw DailySaleNotChangeableException.stale();
             }
             Map<String, Object> before = sale.snapshot();
-            if (!sale.correct(request.cashSalesAmount(), request.cardSalesAmount(), actor, clock.instant())) {
+            if (!sale.correct(request.cashSalesAmount(), request.cardSalesAmount(), request.holiday(), actor,
+                    clock.instant())) {
                 return DailySaleResponse.from(sale);
             }
             try {
@@ -141,6 +138,19 @@ public class DailySaleService {
                     request.reason().strip(), before, sale.snapshot());
             return DailySaleResponse.from(sale);
         });
+    }
+
+    // A company holiday is a closed day with no sales; any other day must have some sales.
+    private static void checkAmounts(BigDecimal cash, BigDecimal card, boolean holiday) {
+        boolean noSales = cash.signum() == 0 && card.signum() == 0;
+        if (holiday && !noSales) {
+            throw new InvalidDailySaleException("companyHoliday",
+                    "a company holiday must have zero cashSalesAmount and cardSalesAmount");
+        }
+        if (!holiday && noSales) {
+            throw new InvalidDailySaleException("totalSalesAmount",
+                    "cashSalesAmount and cardSalesAmount must not both be zero");
+        }
     }
 
     // Who corrected a day, when, why, and the amounts before and after; for everyone who may see the sales.

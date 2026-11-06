@@ -226,6 +226,47 @@ class DailySaleControllerIntegrationTest {
     }
 
     @Test
+    void shouldRecordACompanyHolidayWithoutSales() throws Exception {
+        create(companyId, requestJson(Map.of("cashSalesAmount", "0", "cardSalesAmount", "0", "companyHoliday", true)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.companyHoliday").value(true))
+                .andExpect(content().string(containsString("\"totalSalesAmount\":0.00")));
+        assertThat(jdbcTemplate.queryForObject("SELECT company_holiday FROM daily_sales WHERE company_id = ?",
+                Boolean.class, companyId)).isTrue();
+
+        // Without the mark, a day still needs some sales; with it, it must have none.
+        create(companyId, requestJson(Map.of("saleDate", today.minusDays(2).toString(),
+                "cashSalesAmount", "100.00", "cardSalesAmount", "0", "companyHoliday", true)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.companyHoliday")
+                        .value("a company holiday must have zero cashSalesAmount and cardSalesAmount"));
+        create(companyId, requestJson(Map.of("saleDate", today.minusDays(2).toString())))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.companyHoliday").value(false));
+        assertThat(countSales(companyId)).isEqualTo(2);
+    }
+
+    @Test
+    void shouldCorrectADayToAndFromACompanyHoliday() throws Exception {
+        UUID saleId = insertSale(companyId, today.minusDays(2), "35000.00", "15000.00");
+
+        update(saleId, "0.00", "0.00", "Shop was closed", 1, true)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.companyHoliday").value(true))
+                .andExpect(jsonPath("$.totalSalesAmount").value(0.00));
+        update(saleId, "5.00", "0.00", "Closed, but sold one item", 2, true).andExpect(status().isBadRequest());
+        update(saleId, "1200.00", "0.00", "Opened after all", 2)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.companyHoliday").value(false));
+
+        mockMvc.perform(authenticated(get(salesUrl(companyId) + "/" + saleId + "/corrections")))
+                .andExpect(jsonPath("$[0].companyHolidayBefore").value(true))
+                .andExpect(jsonPath("$[0].companyHolidayAfter").value(false))
+                .andExpect(jsonPath("$[1].companyHolidayBefore").value(false))
+                .andExpect(jsonPath("$[1].companyHolidayAfter").value(true));
+    }
+
+    @Test
     void shouldRejectSecondRecordForSameSaleDate() throws Exception {
         LocalDate saleDate = today.minusDays(3);
         insertSale(companyId, saleDate, "1000.00", "0.00");
@@ -448,11 +489,16 @@ class DailySaleControllerIntegrationTest {
     }
 
     private ResultActions update(UUID saleId, String cash, String card, String reason, int version) throws Exception {
+        return update(saleId, cash, card, reason, version, false);
+    }
+
+    private ResultActions update(UUID saleId, String cash, String card, String reason, int version, boolean holiday)
+            throws Exception {
         return mockMvc.perform(authenticated(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .put(salesUrl(companyId) + "/" + saleId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(JSON.writeValueAsString(Map.of("cashSalesAmount", cash, "cardSalesAmount", card,
-                        "reason", reason, "version", version))));
+                        "reason", reason, "version", version, "companyHoliday", holiday))));
     }
 
     private void assertSaleDates(String query, String... expectedDates) throws Exception {

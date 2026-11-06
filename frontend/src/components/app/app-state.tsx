@@ -38,8 +38,11 @@ export interface AppActions {
   signOut: () => void
   switchCompany: (companyId: string) => void
   saveSale: (s: DailySale) => Promise<string | null>
-  /** Corrects the amounts of a day entered by hand, with a reason; imported days are corrected by reversing the import. */
-  correctSale: (s: DailySale, cash: number, card: number, reason: string) => Promise<string | null>
+  /**
+   * Corrects the amounts (or the company-holiday mark) of a day entered by hand, with a reason; imported days are
+   * corrected by reversing the import.
+   */
+  correctSale: (s: DailySale, cash: number, card: number, reason: string, holiday: boolean) => Promise<string | null>
   addCheque: (c: Cheque) => Promise<string | null>
   updateCheque: (original: Cheque, c: Cheque) => Promise<string | null>
   cancelCheque: (c: Cheque, reason: string) => Promise<string | null>
@@ -179,9 +182,9 @@ function useDemoStateValue(initialUserId: string | null): AppState {
         setDailySales((rows) => [s, ...rows.filter((r) => r.sales_date !== s.sales_date)].sort((a, b) => b.sales_date.localeCompare(a.sales_date)))
         return null
       },
-      correctSale: async (s, cash, card, reason) => {
+      correctSale: async (s, cash, card, reason, holiday) => {
         if (!can(role, "sales.edit")) return denied
-        setDailySales((rows) => rows.map((r) => (r.sales_date === s.sales_date ? { ...r, cash_sales: cash, card_sales: card, total: cash + card, corrected_at: seed.NOW, correction_reason: reason } : r)))
+        setDailySales((rows) => rows.map((r) => (r.sales_date === s.sales_date ? { ...r, cash_sales: cash, card_sales: card, total: cash + card, corrected_at: seed.NOW, correction_reason: reason, company_holiday: holiday } : r)))
         return null
       },
       addCheque: async (c) => { if (!can(role, "cheques.manage")) return denied; setCheques((rows) => upsertCheque(rows, c)); return null },

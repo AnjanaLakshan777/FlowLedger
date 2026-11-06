@@ -15,6 +15,8 @@ public record DailySaleResponse(
         BigDecimal cashSalesAmount,
         BigDecimal cardSalesAmount,
         BigDecimal totalSalesAmount,
+        // A day the company was closed; its amounts are zero.
+        boolean companyHoliday,
         EntrySource entrySource,
         UUID recordedBy,
         Instant recordedAt,
@@ -38,6 +40,7 @@ public record DailySaleResponse(
                 sale.getCashSalesAmount(),
                 sale.getCardSalesAmount(),
                 sale.getTotalSalesAmount(),
+                sale.isCompanyHoliday(),
                 sale.getEntrySource(),
                 sale.getRecordedBy(),
                 sale.getRecordedAt(),
