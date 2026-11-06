@@ -385,7 +385,7 @@ function CreateUserDialog({ companyId, open, onOpenChange, onCreated }: {
       })
       toast.success(`${membership.fullName} added as ${ROLE_NAME[role]}`, {
         description: accountCreated
-          ? "Share the temporary password with them privately. They can sign in now."
+          ? "Share the temporary password with them privately. On their first sign-in they choose their own password, which replaces it."
           : "This email already had a FlowLedger account; it keeps its own name and password.",
       })
       onOpenChange(false); reset(); onCreated()
@@ -409,7 +409,7 @@ function CreateUserDialog({ companyId, open, onOpenChange, onCreated }: {
           </Select>
         </Field>
         <Field label="Temporary password" htmlFor="new-password" error={errors.temporaryPassword}
-          help="At least 12 characters. Needed for a new account; an existing FlowLedger account keeps its own password.">
+          help="At least 12 characters. Needed for a new account, which must replace it on the first sign-in; an existing FlowLedger account keeps its own password.">
           <Input id="new-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <DialogFooter>

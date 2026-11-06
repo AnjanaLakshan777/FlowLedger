@@ -4,7 +4,10 @@ import com.flowledger.identity.dto.LoginRequest;
 import com.flowledger.identity.dto.LoginResponse;
 import com.flowledger.identity.entity.AccountStatus;
 import com.flowledger.identity.entity.User;
+import com.flowledger.identity.dto.PasswordChangeRequest;
 import com.flowledger.identity.exception.InvalidCredentialsException;
+import com.flowledger.identity.exception.InvalidNewPasswordException;
+import com.flowledger.identity.exception.PasswordChangeRequiredException;
 import com.flowledger.identity.repository.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -34,16 +37,40 @@ public class AuthenticationService {
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByEmailIgnoreCase(request.email()).orElse(null);
+        User user = authenticate(request.email(), request.password());
+        // Checked only after the password matched, so it tells nothing to someone without it.
+        if (user.isPasswordChangeRequired()) {
+            throw new PasswordChangeRequiredException();
+        }
+        return accessTokenService.issueAccessToken(user);
+    }
+
+    /**
+     * Replaces the password of an account that proves its current one, and signs it in. A new
+     * account does this on its first sign-in, which replaces the admin's temporary password.
+     */
+    @Transactional
+    public LoginResponse changePassword(PasswordChangeRequest request) {
+        User user = authenticate(request.email(), request.currentPassword());
+        if (request.newPassword().equals(request.currentPassword())) {
+            throw new InvalidNewPasswordException("newPassword must be different from the current password");
+        }
+        user.changePassword(passwordEncoder.encode(request.newPassword()));
+        userRepository.saveAndFlush(user);
+        return accessTokenService.issueAccessToken(user);
+    }
+
+    private User authenticate(String email, String password) {
+        User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
 
         String passwordHash = user != null ? user.getPasswordHash() : unknownUserPasswordHash;
-        boolean passwordMatches = passwordEncoder.matches(request.password(), passwordHash);
+        boolean passwordMatches = passwordEncoder.matches(password, passwordHash);
 
         // PENDING, LOCKED and DISABLED accounts get the same response as a wrong password,
         // so the endpoint does not disclose whether an account exists or what state it is in.
         if (user == null || !passwordMatches || user.getAccountStatus() != AccountStatus.ACTIVE) {
             throw new InvalidCredentialsException();
         }
-        return accessTokenService.issueAccessToken(user);
+        return user;
     }
 }

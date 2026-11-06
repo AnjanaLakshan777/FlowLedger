@@ -45,6 +45,10 @@ public class User {
     @Column(name = "platform_role", nullable = false, length = 30, updatable = false)
     private PlatformRole platformRole;
 
+    // Set for an account created with a company admin's temporary password, until the user replaces it.
+    @Column(name = "password_change_required", nullable = false)
+    private boolean passwordChangeRequired;
+
     @Generated
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -54,10 +58,22 @@ public class User {
     private Instant updatedAt;
 
     public User(String email, String fullName, String passwordHash, AccountStatus accountStatus) {
+        this(email, fullName, passwordHash, accountStatus, false);
+    }
+
+    public User(String email, String fullName, String passwordHash, AccountStatus accountStatus,
+                boolean passwordChangeRequired) {
         this.email = email;
         this.fullName = fullName;
         this.passwordHash = passwordHash;
         this.accountStatus = accountStatus;
+        this.passwordChangeRequired = passwordChangeRequired;
+    }
+
+    // The new hash replaces the old one, so a temporary password stops working at once.
+    public void changePassword(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+        this.passwordChangeRequired = false;
     }
 
     public boolean isActivePlatformAdmin() {

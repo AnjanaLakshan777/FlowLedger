@@ -276,6 +276,20 @@ confirmed before production.
 - Only `ACTIVE` accounts can log in. Wrong passwords, unknown emails, and
   `PENDING`, `LOCKED`, or `DISABLED` accounts all receive the same generic
   401 response.
+- First sign-in with a temporary password (requested by the product owner,
+  2026-11-06): an account created by a company admin has
+  `password_change_required` set (migration
+  `V10__add_password_change_required.sql`; existing accounts are not
+  affected). Its login gets no token: 403 with `code:
+  PASSWORD_CHANGE_REQUIRED`, returned only after the password matched, so it
+  reveals nothing to someone without the password.
+  `POST /api/v1/identity/auth/password-change`
+  `{email, currentPassword, newPassword}` (no token needed) proves the
+  current password the same way as login (same generic 401), requires a new
+  password of 12 to 72 characters (at most 72 bytes) that differs from the
+  current one (400 field error `newPassword`), overwrites the hash, clears
+  the flag, and returns a login response. The sign-in page then asks for the
+  new password twice and signs in with it.
 - Tokens are signed with HS256 and validated by Spring Security's OAuth2
   resource server (Nimbus JOSE + JWT). Signature, issuer, expiry, and the
   presence of `sub`, `iat`, and `exp` are validated.
@@ -388,7 +402,8 @@ administration as above (active `SYSTEM_ADMIN` in any company, or active
   email delivery, so a new email gets an `ACTIVE` account with the admin's
   temporary password (12 to 72 characters, BCrypt-hashed; 400 with a
   `temporaryPassword` field error when missing), and the admin shares it
-  privately. An email that already has an account only gains the membership
+  privately. The user must replace it on the first sign-in (Login and Access
+  Tokens). An email that already has an account only gains the membership
   and keeps its own name, password, and account status. The membership is
   `ACTIVE`, with `invited_by` the admin. 409 when the user is already a
   member.

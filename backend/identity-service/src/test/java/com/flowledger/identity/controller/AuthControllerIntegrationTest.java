@@ -115,6 +115,71 @@ class AuthControllerIntegrationTest {
                 .andExpect(jsonPath("$.errors.password").value("password must not be blank"));
     }
 
+    // First sign-in with a temporary password
+
+    @Test
+    void shouldIssueNoTokenUntilTheTemporaryPasswordIsReplaced() throws Exception {
+        UUID userId = insertUser(email, AccountStatus.ACTIVE);
+        jdbcTemplate.update("UPDATE users SET password_change_required = true WHERE id = ?", userId);
+
+        login(email, PASSWORD)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+        // A wrong password still looks like any wrong password.
+        login(email, "wrong-password-123")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value(INVALID_CREDENTIALS));
+
+        String body = changePassword(email, PASSWORD, "brand-new-password")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(jwtDecoder.decode(JsonPath.read(body, "$.accessToken")).getSubject()).isEqualTo(userId.toString());
+        assertThat(jdbcTemplate.queryForObject("SELECT password_change_required FROM users WHERE id = ?",
+                Boolean.class, userId)).isFalse();
+
+        login(email, PASSWORD).andExpect(status().isUnauthorized());
+        login(email, "brand-new-password").andExpect(status().isOk());
+    }
+
+    @Test
+    void shouldRefuseAPasswordChangeWithoutTheCurrentPasswordOrAValidNewOne() throws Exception {
+        UUID userId = insertUser(email, AccountStatus.ACTIVE);
+        jdbcTemplate.update("UPDATE users SET password_change_required = true WHERE id = ?", userId);
+
+        changePassword(email, "wrong-password-123", "brand-new-password")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value(INVALID_CREDENTIALS));
+        changePassword("nobody-" + email, PASSWORD, "brand-new-password")
+                .andExpect(status().isUnauthorized());
+        changePassword(email, PASSWORD, PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.newPassword").value("newPassword must be different from the current password"));
+        changePassword(email, PASSWORD, "short")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.newPassword").value("newPassword must be between 12 and 72 characters"));
+
+        // Nothing changed: the temporary password still needs replacing.
+        login(email, PASSWORD).andExpect(status().isForbidden());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AccountStatus.class, names = {"PENDING", "LOCKED", "DISABLED"})
+    void shouldNotChangeThePasswordOfAnAccountThatIsNotActive(AccountStatus status) throws Exception {
+        insertUser(email, status);
+
+        changePassword(email, PASSWORD, "brand-new-password").andExpect(status().isUnauthorized());
+    }
+
+    private ResultActions changePassword(String email, String current, String next) throws Exception {
+        return mockMvc.perform(post("/api/v1/identity/auth/password-change")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"email": "%s", "currentPassword": "%s", "newPassword": "%s"}
+                        """.formatted(email, current, next)));
+    }
+
     private ResultActions login(String email, String password) throws Exception {
         return mockMvc.perform(post(LOGIN_URL)
                 .contentType(MediaType.APPLICATION_JSON)

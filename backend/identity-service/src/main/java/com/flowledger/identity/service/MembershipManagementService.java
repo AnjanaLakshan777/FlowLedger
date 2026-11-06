@@ -99,7 +99,7 @@ public class MembershipManagementService {
             }
             try {
                 user = userRepository.saveAndFlush(new User(email, request.fullName().trim(),
-                        passwordEncoder.encode(request.temporaryPassword()), AccountStatus.ACTIVE));
+                        passwordEncoder.encode(request.temporaryPassword()), AccountStatus.ACTIVE, true));
             } catch (DataIntegrityViolationException e) {
                 // A concurrent request created an account for the same email after the lookup.
                 throw new EmailAlreadyRegisteredException();

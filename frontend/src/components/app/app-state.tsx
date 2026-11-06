@@ -32,9 +32,14 @@ export interface Kpis {
   lowestBalance: number | null; lowestDate: string | null
 }
 
+/** What signIn returns when the password is right but is a temporary one that must be replaced first. */
+export const PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
+
 export interface AppActions {
-  /** Returns an error message, or null when signed in. */
+  /** Returns an error message, PASSWORD_CHANGE_REQUIRED, or null when signed in. */
   signIn: (email: string, password?: string, remember?: boolean) => Promise<string | null>
+  /** Replaces the temporary password on the first sign-in and signs in. Returns an error message, or null. */
+  changeTemporaryPassword: (email: string, temporaryPassword: string, newPassword: string, remember: boolean) => Promise<string | null>
   signOut: () => void
   switchCompany: (companyId: string) => void
   saveSale: (s: DailySale) => Promise<string | null>
@@ -175,6 +180,7 @@ function useDemoStateValue(initialUserId: string | null): AppState {
         setUserId(u.user_id)
         return null
       },
+      changeTemporaryPassword: async () => "Demo accounts have no temporary password.",
       signOut: () => setUserId(null),
       switchCompany: () => {},
       saveSale: async (s) => {

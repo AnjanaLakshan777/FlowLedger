@@ -197,6 +197,11 @@ const forecast = (c: string) => `/api/v1/forecast/companies/${c}`
 export const flowledger = {
   login: (email: string, password: string) =>
     api<{ accessToken: string; expiresIn: number }>(`${identity}/auth/login`, { method: "POST", json: { email, password }, anonymous: true }),
+  /** Replaces the password (on the first sign-in, the temporary one) and signs in with the new one. */
+  changePassword: (email: string, currentPassword: string, newPassword: string) =>
+    api<{ accessToken: string; expiresIn: number }>(`${identity}/auth/password-change`, {
+      method: "POST", json: { email, currentPassword, newPassword }, anonymous: true,
+    }),
   me: () => api<CurrentUser>(`${identity}/me`),
 
   memberships: (c: string) => api<ApiMembership[]>(`${identity}/companies/${c}/memberships`),

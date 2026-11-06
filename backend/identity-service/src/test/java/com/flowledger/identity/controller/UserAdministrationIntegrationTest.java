@@ -90,10 +90,31 @@ class UserAdministrationIntegrationTest {
         assertThat(jdbcTemplate.queryForObject("SELECT password_hash FROM users WHERE id = ?", String.class, userId))
                 .doesNotContain(PASSWORD);
 
-        // The new user can sign in with the temporary password straight away.
+        // The temporary password gives no access token: the first sign-in must replace it.
+        assertThat(jdbcTemplate.queryForObject("SELECT password_change_required FROM users WHERE id = ?",
+                Boolean.class, userId)).isTrue();
         mockMvc.perform(post("/api/v1/identity/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\": \"" + email + "\", \"password\": \"" + PASSWORD + "\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+        String newPassword = "my-own-new-password";
+        mockMvc.perform(post("/api/v1/identity/auth/password-change")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"" + email + "\", \"currentPassword\": \"" + PASSWORD
+                                + "\", \"newPassword\": \"" + newPassword + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty());
+
+        // The temporary password is overwritten; the new one signs in.
+        mockMvc.perform(post("/api/v1/identity/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"" + email + "\", \"password\": \"" + PASSWORD + "\"}"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/identity/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"" + email + "\", \"password\": \"" + newPassword + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").isNotEmpty());
     }

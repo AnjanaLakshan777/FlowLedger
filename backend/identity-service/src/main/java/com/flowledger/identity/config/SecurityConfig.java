@@ -53,6 +53,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, "/api/v1/identity/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/identity/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/identity/auth/password-change").permitAll()
                         // Public self-registration into an existing company; privileged roles are refused.
                         .requestMatchers(HttpMethod.POST, "/api/v1/identity/registrations").permitAll()
                         .anyRequest().authenticated())

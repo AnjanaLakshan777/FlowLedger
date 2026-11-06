@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Field } from "@/components/app/field"
 import { Logo } from "@/components/app/logo"
-import { useAppState } from "@/components/app/app-state"
+import { PASSWORD_CHANGE_REQUIRED, useAppState } from "@/components/app/app-state"
 import { homePage, ROLE_LABEL } from "@/lib/permissions"
 
 export default function LoginPage() {
@@ -24,6 +24,8 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(true)
   const [forgot, setForgot] = useState(false)
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
+  // First sign-in with a temporary password: the user must choose their own before getting in.
+  const [changing, setChanging] = useState(false)
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -41,6 +43,7 @@ export default function LoginPage() {
     setFailure(null)
     const err = await actions.signIn(address, password, remember)
     setBusy(false)
+    if (err === PASSWORD_CHANGE_REQUIRED) return setChanging(true)
     if (err) return demo ? setErrors({ email: err }) : setFailure(err)
     // live: the home page follows the company role, which is known once the user is loaded
     const u = users.find((x) => x.email.toLowerCase() === address.trim().toLowerCase())
@@ -76,6 +79,10 @@ export default function LoginPage() {
         <div className="text-muted-foreground text-xs">© 2026 FlowLedger · Colombo, Sri Lanka</div>
       </div>
       <div className="grid place-items-center px-6 py-10">
+        {changing ? (
+          <NewPasswordForm email={email} temporaryPassword={password} remember={remember}
+            onBack={() => { setChanging(false); setPassword("") }} onDone={() => navigate("/")} />
+        ) : (
         <form onSubmit={submit} className="grid w-full max-w-[380px] gap-5" noValidate>
           <div className="grid gap-1.5">
             <div className="mb-2 lg:hidden"><Logo /></div>
@@ -133,7 +140,82 @@ export default function LoginPage() {
             ))}
           </div>}
         </form>
+        )}
       </div>
     </div>
+  )
+}
+
+const byteLength = (s: string) => new TextEncoder().encode(s).length
+
+/**
+ * Shown after a correct temporary password. Saving replaces it on the server, so it stops working, and signs in
+ * with the new password.
+ */
+function NewPasswordForm({ email, temporaryPassword, remember, onBack, onDone }: {
+  email: string; temporaryPassword: string; remember: boolean; onBack: () => void; onDone: () => void
+}) {
+  const { actions } = useAppState()
+  const [next, setNext] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [errors, setErrors] = useState<{ next?: string; confirm?: string }>({})
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    const found = {
+      next: next.length < 12 || byteLength(next) > 72 ? "Use 12 to 72 characters."
+        : next === temporaryPassword ? "Choose a password that is different from the temporary one." : undefined,
+      confirm: confirm !== next ? "The passwords don't match." : undefined,
+    }
+    setErrors(found)
+    if (found.next || found.confirm) return
+    setBusy(true)
+    setFailure(null)
+    const err = await actions.changeTemporaryPassword(email, temporaryPassword, next, remember)
+    setBusy(false)
+    if (err) return setFailure(err)
+    onDone()
+  }
+
+  return (
+    <form onSubmit={(e) => void submit(e)} className="grid w-full max-w-[380px] gap-5" noValidate>
+      <div className="grid gap-1.5">
+        <div className="mb-2 lg:hidden"><Logo /></div>
+        <h1 className="text-[22px] font-semibold tracking-tight">Set your password</h1>
+        <p className="text-muted-foreground text-sm">
+          This is your first sign-in as <b className="text-foreground font-medium">{email.trim()}</b>. Choose your own password to replace the
+          temporary one your company admin gave you. The temporary password stops working.
+        </p>
+      </div>
+      {failure && (
+        <Alert variant="destructive">
+          <Info />
+          <AlertTitle>Password not changed</AlertTitle>
+          <AlertDescription>{failure}</AlertDescription>
+        </Alert>
+      )}
+      {/* Lets password managers save the new password against the right account. */}
+      <input type="email" autoComplete="username" value={email} readOnly hidden />
+      <Field label="New password" htmlFor="new-password" error={errors.next} help={errors.next ? undefined : "12 to 72 characters."}>
+        <div className="relative">
+          <Input id="new-password" type={show ? "text" : "password"} autoComplete="new-password" className="pr-10" value={next} autoFocus
+            onChange={(e) => setNext(e.target.value)} aria-invalid={!!errors.next || undefined} />
+          <Button type="button" variant="ghost" size="icon-sm" className="absolute top-1/2 right-0.5 -translate-y-1/2" onClick={() => setShow((s) => !s)} aria-label={show ? "Hide password" : "Show password"}>
+            {show ? <EyeOff /> : <Eye />}
+          </Button>
+        </div>
+      </Field>
+      <Field label="Confirm new password" htmlFor="confirm-password" error={errors.confirm}>
+        <Input id="confirm-password" type={show ? "text" : "password"} autoComplete="new-password" value={confirm}
+          onChange={(e) => setConfirm(e.target.value)} aria-invalid={!!errors.confirm || undefined} />
+      </Field>
+      <div className="grid gap-2">
+        <Button type="submit" className="w-full" disabled={busy}>{busy ? "Saving…" : "Save password and sign in"}</Button>
+        <Button type="button" variant="ghost" className="w-full" onClick={onBack} disabled={busy}>Back to sign in</Button>
+      </div>
+    </form>
   )
 }

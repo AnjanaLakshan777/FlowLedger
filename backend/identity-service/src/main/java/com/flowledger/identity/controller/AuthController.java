@@ -2,6 +2,7 @@ package com.flowledger.identity.controller;
 
 import com.flowledger.identity.dto.LoginRequest;
 import com.flowledger.identity.dto.LoginResponse;
+import com.flowledger.identity.dto.PasswordChangeRequest;
 import com.flowledger.identity.service.AuthenticationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -20,5 +21,11 @@ public class AuthController {
     @PostMapping("/login")
     public LoginResponse login(@Valid @RequestBody LoginRequest request) {
         return authenticationService.login(request);
+    }
+
+    // Replaces the password and signs in with the new one.
+    @PostMapping("/password-change")
+    public LoginResponse changePassword(@Valid @RequestBody PasswordChangeRequest request) {
+        return authenticationService.changePassword(request);
     }
 }

@@ -6,7 +6,7 @@ import { ApiError, errorMessage, session } from "@/lib/api/client"
 import { flowledger, type CompanyRole, type CurrentUser, type ForecastRun, type ForecastRunSummary } from "@/lib/api/flowledger"
 import { addDays, sum } from "@/lib/format"
 import { can, canAccessPage, type PageId, type Permission } from "@/lib/permissions"
-import { AUTO_IDLE, Ctx, type AppActions, type AppState, type Kpis, type Resource, type ResourceState } from "./app-state"
+import { AUTO_IDLE, Ctx, PASSWORD_CHANGE_REQUIRED, type AppActions, type AppState, type Kpis, type Resource, type ResourceState } from "./app-state"
 
 /**
  * The company admin role uses the UI's administrator permission set (labelled "System Admin" in
@@ -182,7 +182,18 @@ function useLiveStateValue(): AppState {
           const { accessToken } = await flowledger.login(email.trim(), password)
           session.set(accessToken, remember)
         } catch (e) {
+          if (e instanceof ApiError && e.status === 403 && e.problem.code === PASSWORD_CHANGE_REQUIRED) return PASSWORD_CHANGE_REQUIRED
           return e instanceof ApiError && e.status === 401 ? "Email or password is incorrect, or the account is not active yet." : errorMessage(e)
+        }
+        return loadMe()
+      },
+      changeTemporaryPassword: async (email, temporaryPassword, newPassword, remember) => {
+        try {
+          const { accessToken } = await flowledger.changePassword(email.trim(), temporaryPassword, newPassword)
+          session.set(accessToken, remember)
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) return "The temporary password is no longer correct. Sign in again."
+          return e instanceof ApiError && e.fieldErrors.newPassword ? newPasswordMessage(e.fieldErrors.newPassword) : errorMessage(e)
         }
         return loadMe()
       },
@@ -256,4 +267,9 @@ function useLiveStateValue(): AppState {
 export function LiveAppStateProvider({ children }: { children: ReactNode }) {
   const value = useLiveStateValue()
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+}
+
+/** The identity service's new-password field errors, in the sign-in page's words. */
+function newPasswordMessage(serverMessage: string) {
+  return serverMessage.includes("different") ? "Choose a password that is different from the temporary one." : "Use 12 to 72 characters for the new password."
 }
