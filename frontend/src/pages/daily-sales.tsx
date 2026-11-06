@@ -304,6 +304,10 @@ function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose:
               aria-invalid={!!errors.reason || undefined} />
           </Field>
           {errors.form && <Alert variant="destructive"><AlertTriangle /><AlertDescription>{errors.form}</AlertDescription></Alert>}
+          <section aria-labelledby="cs-history" className="grid gap-2 border-t pt-3">
+            <h3 id="cs-history" className="text-sm font-medium">Earlier corrections</h3>
+            <CorrectionHistoryList sale={sale} className="max-h-56" />
+          </section>
           <DialogFooter>
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             <Button disabled={saving} onClick={() => void save(sale)}>{saving ? "Saving…" : "Save correction"}</Button>
@@ -316,13 +320,34 @@ function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose:
 
 /** Why a day's sales were corrected: each correction with its reason, who made it, when, and the amounts before and after. */
 function CorrectionHistoryDialog({ sale, onClose }: { sale: DailySale | null; onClose: () => void }) {
+  return (
+    <Dialog open={!!sale} onOpenChange={(o) => !o && onClose()}>
+      {sale && (
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Corrections for {fmt.date(sale.sales_date)}</DialogTitle>
+            <DialogDescription>Each correction with its reason, newest first. Now {saleAmounts(sale.cash_sales, sale.card_sales)}.</DialogDescription>
+          </DialogHeader>
+          <CorrectionHistoryList sale={sale} />
+          <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  )
+}
+
+const saleAmounts = (cash: number, card: number) => `${fmt.lkr(cash + card)} (cash ${fmt.amt(cash)}, card ${fmt.amt(card)})`
+
+/** A day's corrections, newest first, loaded from the audit history. A day never corrected needs no request. */
+function CorrectionHistoryList({ sale, className }: { sale: DailySale; className?: string }) {
   const { company, currentUser } = useAppState()
   const [rows, setRows] = useState<ApiSaleCorrection[] | null>(null)
   const [names, setNames] = useState<Map<string, string>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const cid = company?.id
+  const corrected = !!sale.id && !!sale.corrected_at
   useEffect(() => {
-    if (!sale?.id || !cid) return
+    if (!corrected || !sale.id || !cid) return
     let current = true
     setRows(null); setError(null)
     Promise.all([flowledger.saleCorrections(cid, sale.id), flowledger.memberNames(cid).catch(() => [])])
@@ -333,39 +358,23 @@ function CorrectionHistoryDialog({ sale, onClose }: { sale: DailySale | null; on
       })
       .catch((e) => { if (current) setError(errorMessage(e)) })
     return () => { current = false }
-  }, [sale, cid])
+  }, [sale, cid, corrected])
 
-  const amounts = (cash: number, card: number) => `${fmt.lkr(cash + card)} (cash ${fmt.amt(cash)}, card ${fmt.amt(card)})`
+  if (!corrected) return <p className={cn("text-muted-foreground text-sm", className)}>No corrections recorded.</p>
+  if (error) return <Alert variant="destructive" className={className}><AlertTriangle /><AlertDescription>{error}</AlertDescription></Alert>
+  if (!rows) return <p className={cn("text-muted-foreground text-sm", className)}>Loading…</p>
+  if (rows.length === 0) return <p className={cn("text-muted-foreground text-sm", className)}>No corrections recorded.</p>
   return (
-    <Dialog open={!!sale} onOpenChange={(o) => !o && onClose()}>
-      {sale && (
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Corrections for {fmt.date(sale.sales_date)}</DialogTitle>
-            <DialogDescription>Each correction with its reason, newest first. Now {amounts(sale.cash_sales, sale.card_sales)}.</DialogDescription>
-          </DialogHeader>
-          {error ? (
-            <Alert variant="destructive"><AlertTriangle /><AlertDescription>{error}</AlertDescription></Alert>
-          ) : !rows ? (
-            <p className="text-muted-foreground text-sm">Loading…</p>
-          ) : rows.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No corrections recorded.</p>
-          ) : (
-            <ol className="grid max-h-96 gap-3 overflow-y-auto">
-              {rows.map((c) => (
-                <li key={c.correctedAt + c.reason} className="grid gap-1 rounded-md border p-3 text-sm">
-                  <span className="font-medium">“{c.reason}”</span>
-                  <span className="text-muted-foreground text-xs">
-                    {personName(c.correctedBy, currentUser?.user_id ?? null, names)} · {fmt.dateTimeFull(colomboLocal(c.correctedAt))}
-                  </span>
-                  <span className="tabular text-xs">{amounts(c.cashSalesBefore, c.cardSalesBefore)} → {amounts(c.cashSalesAfter, c.cardSalesAfter)}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-          <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
-        </DialogContent>
-      )}
-    </Dialog>
+    <ol className={cn("grid max-h-96 gap-3 overflow-y-auto", className)}>
+      {rows.map((c) => (
+        <li key={c.correctedAt + c.reason} className="grid gap-1 rounded-md border p-3 text-sm">
+          <span className="font-medium">“{c.reason}”</span>
+          <span className="text-muted-foreground text-xs">
+            Corrected by {personName(c.correctedBy, currentUser?.user_id ?? null, names)} · {fmt.dateTimeFull(colomboLocal(c.correctedAt))}
+          </span>
+          <span className="tabular text-xs">{saleAmounts(c.cashSalesBefore, c.cardSalesBefore)} → {saleAmounts(c.cashSalesAfter, c.cardSalesAfter)}</span>
+        </li>
+      ))}
+    </ol>
   )
 }
