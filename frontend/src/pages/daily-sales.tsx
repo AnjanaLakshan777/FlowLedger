@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
-import { AlertTriangle, CalendarDays, Check, Clock, Info, Lock, Pencil } from "lucide-react"
+import { AlertTriangle, CalendarDays, Check, Clock, History, Info, Lock, PanelLeftClose, PanelLeftOpen, Pencil } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -19,8 +19,12 @@ import { PageHeader } from "@/components/app/page-header"
 import { SearchInput } from "@/components/app/search-input"
 import { StatusBadge } from "@/components/app/status-badge"
 import type { DailySale } from "@/data/types"
+import { colomboLocal, personName } from "@/lib/api/adapters"
+import { errorMessage } from "@/lib/api/client"
+import { flowledger, type ApiSaleCorrection } from "@/lib/api/flowledger"
 import { monthLabel } from "@/lib/calendar"
 import { addDays, daysBetween, fmt, parseAmount, sum } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 export default function DailySalesPage() {
   const { dailySales, currentUser, actions, allow, today: TODAY, now: NOW, mode } = useAppState()
@@ -28,6 +32,10 @@ export default function DailySalesPage() {
   const canEdit = allow("sales.enter")
   const canCorrect = allow("sales.edit")
   const [correcting, setCorrecting] = useState<DailySale | null>(null)
+  const [history, setHistory] = useState<DailySale | null>(null)
+  // Hiding the entry panel to the side gives the list the full width; it is open again on every visit to the page.
+  const [entryOpen, setEntryOpen] = useState(true)
+  const toggleEntry = setEntryOpen
   const notReady = useNotReady(["sales"])
   const [saving, setSaving] = useState(false)
   // months that have entries, newest first
@@ -93,13 +101,20 @@ export default function DailySalesPage() {
           <AlertDescription>Last entry is for {fmt.day(latest)}.{!live && " Predicted sales are used in the forecast until actual sales are entered."}</AlertDescription>
         </Alert>
       )}
-      <div className="grid items-start gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <div className="grid gap-4">
+      <div className={cn("grid items-start gap-4", entryOpen && "xl:grid-cols-[380px_minmax(0,1fr)]")}>
+        {entryOpen && (
+        <div id="ds-entry-panel" className="grid items-start gap-4">
           <Card>
             <CardHeader>
               <CardTitle>New sales entry</CardTitle>
+              <CardAction>
+                <Button variant="ghost" size="icon-sm" onClick={() => toggleEntry(false)} aria-expanded aria-controls="ds-entry-panel"
+                  aria-label="Hide the sales entry panel" title="Hide the sales entry panel">
+                  <PanelLeftClose />
+                </Button>
+              </CardAction>
             </CardHeader>
-            <CardContent className="grid gap-3.5">
+            <CardContent id="ds-entry" className="grid gap-3.5">
               {!canEdit && (
                 <Alert><Lock /><AlertTitle>View only</AlertTitle><AlertDescription>Your role can't enter daily sales.</AlertDescription></Alert>
               )}
@@ -155,9 +170,18 @@ export default function DailySalesPage() {
             </CardContent>
           </Card>
         </div>
+        )}
         {notReady ? <DataState resources={["sales"]} what="Sales entries" /> : <Card>
           <CardHeader>
-            <CardTitle>Sales entries</CardTitle>
+            <CardTitle className="flex items-center gap-1.5">
+              {!entryOpen && (
+                <Button variant="ghost" size="icon-sm" onClick={() => toggleEntry(true)} aria-expanded={false} aria-controls="ds-entry-panel"
+                  aria-label="Show the sales entry panel" title="Show the sales entry panel">
+                  <PanelLeftOpen />
+                </Button>
+              )}
+              Sales entries
+            </CardTitle>
             <CardDescription>Sales date and entry time are shown separately</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
@@ -190,9 +214,18 @@ export default function DailySalesPage() {
               { key: "by", header: "Entered by", sortValue: (r) => r.entered_by, cell: (r) => r.entered_by },
               {
                 key: "type", header: "Type", sortValue: (r) => r.entry_type, cell: (r) => (
+                  <div>
                   <div className="flex flex-wrap items-center gap-1">
                     {r.entry_type === "Standard" ? <span className="text-muted-foreground">On time</span> : <StatusBadge status={r.entry_type} />}
-                    {r.corrected_at && <Badge variant="outline" title={`Corrected ${fmt.dateTimeFull(r.corrected_at)}`}>Corrected</Badge>}
+                    {r.corrected_at && (live && r.id
+                      ? <button type="button" onClick={() => setHistory(r)} className="focus-visible:ring-ring/50 rounded-md outline-none focus-visible:ring-[3px]" aria-label={`Why sales for ${fmt.date(r.sales_date)} were corrected`}>
+                          <Badge variant="outline" className="cursor-pointer hover:bg-accent"><History />Corrected</Badge>
+                        </button>
+                      : <Badge variant="outline" title={`Corrected ${fmt.dateTimeFull(r.corrected_at)}`}>Corrected</Badge>)}
+                  </div>
+                  {r.correction_reason && (
+                    <span className="text-muted-foreground mt-1 block max-w-60 truncate text-xs" title={r.correction_reason}>Reason: {r.correction_reason}</span>
+                  )}
                   </div>
                 ),
               },
@@ -208,6 +241,7 @@ export default function DailySalesPage() {
         </Card>}
       </div>
       <CorrectSaleDialog sale={correcting} onClose={() => setCorrecting(null)} />
+      <CorrectionHistoryDialog sale={history} onClose={() => setHistory(null)} />
     </>
   )
 }
@@ -274,6 +308,62 @@ function CorrectSaleDialog({ sale, onClose }: { sale: DailySale | null; onClose:
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             <Button disabled={saving} onClick={() => void save(sale)}>{saving ? "Saving…" : "Save correction"}</Button>
           </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  )
+}
+
+/** Why a day's sales were corrected: each correction with its reason, who made it, when, and the amounts before and after. */
+function CorrectionHistoryDialog({ sale, onClose }: { sale: DailySale | null; onClose: () => void }) {
+  const { company, currentUser } = useAppState()
+  const [rows, setRows] = useState<ApiSaleCorrection[] | null>(null)
+  const [names, setNames] = useState<Map<string, string>>(new Map())
+  const [error, setError] = useState<string | null>(null)
+  const cid = company?.id
+  useEffect(() => {
+    if (!sale?.id || !cid) return
+    let current = true
+    setRows(null); setError(null)
+    Promise.all([flowledger.saleCorrections(cid, sale.id), flowledger.memberNames(cid).catch(() => [])])
+      .then(([corrections, members]) => {
+        if (!current) return
+        setRows(corrections)
+        setNames(new Map(members.map((m) => [m.userId, m.fullName])))
+      })
+      .catch((e) => { if (current) setError(errorMessage(e)) })
+    return () => { current = false }
+  }, [sale, cid])
+
+  const amounts = (cash: number, card: number) => `${fmt.lkr(cash + card)} (cash ${fmt.amt(cash)}, card ${fmt.amt(card)})`
+  return (
+    <Dialog open={!!sale} onOpenChange={(o) => !o && onClose()}>
+      {sale && (
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Corrections for {fmt.date(sale.sales_date)}</DialogTitle>
+            <DialogDescription>Each correction with its reason, newest first. Now {amounts(sale.cash_sales, sale.card_sales)}.</DialogDescription>
+          </DialogHeader>
+          {error ? (
+            <Alert variant="destructive"><AlertTriangle /><AlertDescription>{error}</AlertDescription></Alert>
+          ) : !rows ? (
+            <p className="text-muted-foreground text-sm">Loading…</p>
+          ) : rows.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No corrections recorded.</p>
+          ) : (
+            <ol className="grid max-h-96 gap-3 overflow-y-auto">
+              {rows.map((c) => (
+                <li key={c.correctedAt + c.reason} className="grid gap-1 rounded-md border p-3 text-sm">
+                  <span className="font-medium">“{c.reason}”</span>
+                  <span className="text-muted-foreground text-xs">
+                    {personName(c.correctedBy, currentUser?.user_id ?? null, names)} · {fmt.dateTimeFull(colomboLocal(c.correctedAt))}
+                  </span>
+                  <span className="tabular text-xs">{amounts(c.cashSalesBefore, c.cardSalesBefore)} → {amounts(c.cashSalesAfter, c.cardSalesAfter)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
         </DialogContent>
       )}
     </Dialog>

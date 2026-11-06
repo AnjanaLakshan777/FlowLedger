@@ -21,10 +21,16 @@ public record DailySaleResponse(
         // Set once the day has been corrected.
         UUID updatedBy,
         Instant updatedAt,
-        int version
+        int version,
+        // The reason given with the latest correction, in lists only; null otherwise.
+        String correctionReason
 ) {
 
     public static DailySaleResponse from(DailySale sale) {
+        return from(sale, null);
+    }
+
+    public static DailySaleResponse from(DailySale sale, String correctionReason) {
         return new DailySaleResponse(
                 sale.getId(),
                 sale.getCompanyId(),
@@ -37,7 +43,8 @@ public record DailySaleResponse(
                 sale.getRecordedAt(),
                 sale.getUpdatedBy(),
                 sale.getUpdatedAt(),
-                sale.getVersion()
+                sale.getVersion(),
+                correctionReason
         );
     }
 }

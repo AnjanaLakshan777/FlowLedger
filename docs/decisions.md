@@ -284,7 +284,9 @@ confirmed before production.
   company data.
 - Configuration (`application.properties`):
   - `flowledger.security.jwt.issuer`: `flowledger-identity`
-  - `flowledger.security.jwt.access-token-ttl`: `15m`
+  - `flowledger.security.jwt.access-token-ttl`: `JWT_ACCESS_TOKEN_TTL`, default
+    `8h` (2026-11-06; was `15m`, which signed users out during the working
+    day because there are no refresh tokens)
   - `flowledger.security.jwt.secret`: read from the `JWT_SECRET` environment
     variable. It must be a Base64-encoded key of at least 256 bits. The
     service fails to start if it is missing or invalid; there is no
@@ -764,6 +766,9 @@ before production.
   Each correction sets `updated_by`/`updated_at`, increments `version`, and
   writes `DAILY_SALE_CORRECTED` to `cash_management_audit_events` with the
   reason and the amounts before and after; unchanged amounts save nothing.
+  `GET .../sales/{saleId}/corrections` returns that history (who, when,
+  reason, amounts before and after; newest first) to every role that may
+  see the sales; Daily Sales opens it from the "Corrected" badge.
 - One record per company per sale date, holding `cashSalesAmount` and
   `cardSalesAmount` (`NUMERIC(19,2)`, each at least 0, at most two decimal
   places). Their total must be greater than 0. A second record for the same

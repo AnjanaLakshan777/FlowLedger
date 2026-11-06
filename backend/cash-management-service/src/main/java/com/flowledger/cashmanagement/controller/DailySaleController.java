@@ -1,6 +1,7 @@
 package com.flowledger.cashmanagement.controller;
 
 import com.flowledger.cashmanagement.dto.CreateDailySaleRequest;
+import com.flowledger.cashmanagement.dto.DailySaleCorrectionResponse;
 import com.flowledger.cashmanagement.dto.DailySaleResponse;
 import com.flowledger.cashmanagement.dto.UpdateDailySaleRequest;
 import com.flowledger.cashmanagement.service.DailySaleService;
@@ -55,6 +56,13 @@ public class DailySaleController {
                                              @PathVariable UUID saleId,
                                              @Valid @RequestBody UpdateDailySaleRequest request) {
         return dailySaleService.updateDailySale(user, companyId, saleId, request);
+    }
+
+    @GetMapping("/{saleId}/corrections")
+    public List<DailySaleCorrectionResponse> listCorrections(@AuthenticationPrincipal Jwt user,
+                                                            @PathVariable UUID companyId,
+                                                            @PathVariable UUID saleId) {
+        return dailySaleService.listCorrections(user, companyId, saleId);
     }
 
     @GetMapping("/{saleId}")

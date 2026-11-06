@@ -1,6 +1,7 @@
 package com.flowledger.cashmanagement.service;
 
 import com.flowledger.cashmanagement.dto.CreateDailySaleRequest;
+import com.flowledger.cashmanagement.dto.DailySaleCorrectionResponse;
 import com.flowledger.cashmanagement.dto.DailySaleResponse;
 import com.flowledger.cashmanagement.dto.UpdateDailySaleRequest;
 import com.flowledger.cashmanagement.entity.DailySale;
@@ -142,6 +143,15 @@ public class DailySaleService {
         });
     }
 
+    // Who corrected a day, when, why, and the amounts before and after; for everyone who may see the sales.
+    public List<DailySaleCorrectionResponse> listCorrections(Jwt user, UUID companyId, UUID saleId) {
+        companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
+        return readTransaction.execute(status -> {
+            dailySaleRepository.findByCompanyIdAndId(companyId, saleId).orElseThrow(DailySaleNotFoundException::new);
+            return auditEventStore.dailySaleCorrections(companyId, saleId);
+        });
+    }
+
     public DailySaleResponse getDailySale(Jwt user, UUID companyId, UUID saleId) {
         companyAccessVerifier.verify(user, companyId, VIEW_ROLES);
         return readTransaction.execute(status -> dailySaleRepository.findByCompanyIdAndId(companyId, saleId)
@@ -155,8 +165,11 @@ public class DailySaleService {
         if (from != null && to != null && to.isBefore(from)) {
             throw new InvalidDailySaleException("to", "to must not be before from");
         }
-        return readTransaction.execute(status -> dailySaleRepository.findForCompany(companyId, from, to).stream()
-                .map(DailySaleResponse::from)
-                .toList());
+        return readTransaction.execute(status -> {
+            Map<UUID, String> reasons = auditEventStore.latestCorrectionReasons(companyId);
+            return dailySaleRepository.findForCompany(companyId, from, to).stream()
+                    .map(sale -> DailySaleResponse.from(sale, reasons.get(sale.getId())))
+                    .toList();
+        });
     }
 }

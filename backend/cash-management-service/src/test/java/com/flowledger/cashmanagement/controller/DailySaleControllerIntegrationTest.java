@@ -386,6 +386,26 @@ class DailySaleControllerIntegrationTest {
         assertThat(audit).containsEntry("action", "DAILY_SALE_CORRECTED").containsEntry("actor_user_id", userId)
                 .containsEntry("reason", "Cash count was wrong").containsEntry("before_cash", "35000.00")
                 .containsEntry("after_cash", "36000.50");
+
+        // The history shows why, by whom, and the amounts before and after, newest first.
+        update(saleId, "36000.50", "16000.00", "Card slip found", 2).andExpect(status().isOk());
+        identityService.reset();
+        identityService.grant(companyId, "CASHIER");
+        mockMvc.perform(authenticated(get(salesUrl(companyId) + "/" + saleId + "/corrections")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(2)))
+                .andExpect(jsonPath("$[0].reason").value("Card slip found"))
+                .andExpect(jsonPath("$[0].cardSalesBefore").value(15000.00))
+                .andExpect(jsonPath("$[0].cardSalesAfter").value(16000.00))
+                .andExpect(jsonPath("$[1].reason").value("Cash count was wrong"))
+                .andExpect(jsonPath("$[1].correctedBy").value(userId.toString()))
+                .andExpect(jsonPath("$[1].correctedAt").isNotEmpty())
+                .andExpect(jsonPath("$[1].cashSalesBefore").value(35000.00));
+        mockMvc.perform(authenticated(get(salesUrl(companyId) + "/" + UUID.randomUUID() + "/corrections")))
+                .andExpect(status().isNotFound());
+        // The list carries the latest reason, so the screen shows it without opening the history.
+        mockMvc.perform(authenticated(get(salesUrl(companyId))))
+                .andExpect(jsonPath("$[0].correctionReason").value("Card slip found"));
     }
 
     @Test

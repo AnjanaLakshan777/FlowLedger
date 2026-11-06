@@ -179,9 +179,9 @@ function useDemoStateValue(initialUserId: string | null): AppState {
         setDailySales((rows) => [s, ...rows.filter((r) => r.sales_date !== s.sales_date)].sort((a, b) => b.sales_date.localeCompare(a.sales_date)))
         return null
       },
-      correctSale: async (s, cash, card) => {
+      correctSale: async (s, cash, card, reason) => {
         if (!can(role, "sales.edit")) return denied
-        setDailySales((rows) => rows.map((r) => (r.sales_date === s.sales_date ? { ...r, cash_sales: cash, card_sales: card, total: cash + card, corrected_at: seed.NOW } : r)))
+        setDailySales((rows) => rows.map((r) => (r.sales_date === s.sales_date ? { ...r, cash_sales: cash, card_sales: card, total: cash + card, corrected_at: seed.NOW, correction_reason: reason } : r)))
         return null
       },
       addCheque: async (c) => { if (!can(role, "cheques.manage")) return denied; setCheques((rows) => upsertCheque(rows, c)); return null },

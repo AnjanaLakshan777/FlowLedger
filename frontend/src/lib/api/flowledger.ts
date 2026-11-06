@@ -13,6 +13,13 @@ export interface ApiDailySale {
   entrySource: string; recordedBy: string; recordedAt: string
   /** Set once the day has been corrected. */
   updatedBy: string | null; updatedAt: string | null; version: number
+  /** The reason given with the latest correction (lists only). */
+  correctionReason?: string | null
+}
+
+export interface ApiSaleCorrection {
+  correctedBy: string; correctedAt: string; reason: string
+  cashSalesBefore: number; cardSalesBefore: number; cashSalesAfter: number; cardSalesAfter: number
 }
 
 export interface ApiBankAccount {
@@ -203,6 +210,8 @@ export const flowledger = {
   sales: (c: string) => api<ApiDailySale[]>(`${cash(c)}/sales`),
   recordSale: (c: string, saleDate: string, cashSalesAmount: number, cardSalesAmount: number) =>
     api<ApiDailySale>(`${cash(c)}/sales`, { method: "POST", json: { saleDate, cashSalesAmount, cardSalesAmount } }),
+  /** Who corrected a day, when, why, and the amounts before and after; newest first. */
+  saleCorrections: (c: string, id: string) => api<ApiSaleCorrection[]>(`${cash(c)}/sales/${id}/corrections`),
   /** Corrects a day entered by hand (amounts only), with a reason for the audit history. */
   correctSale: (c: string, id: string, cashSalesAmount: number, cardSalesAmount: number, reason: string, version: number) =>
     api<ApiDailySale>(`${cash(c)}/sales/${id}`, { method: "PUT", json: { cashSalesAmount, cardSalesAmount, reason, version } }),

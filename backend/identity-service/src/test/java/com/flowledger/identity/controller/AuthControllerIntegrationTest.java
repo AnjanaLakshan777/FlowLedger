@@ -66,7 +66,7 @@ class AuthControllerIntegrationTest {
         String body = login(email.toUpperCase(), PASSWORD)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
-                .andExpect(jsonPath("$.expiresIn").value(900))
+                .andExpect(jsonPath("$.expiresIn").value(28800))
                 .andExpect(jsonPath("$.email").doesNotExist())
                 .andExpect(jsonPath("$.passwordHash").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
@@ -74,7 +74,7 @@ class AuthControllerIntegrationTest {
         Jwt jwt = jwtDecoder.decode(JsonPath.read(body, "$.accessToken"));
         assertThat(jwt.getSubject()).isEqualTo(userId.toString());
         assertThat(jwt.getClaimAsString(JwtClaimNames.ISS)).isEqualTo("flowledger-identity");
-        assertThat(Duration.between(jwt.getIssuedAt(), jwt.getExpiresAt())).isEqualTo(Duration.ofMinutes(15));
+        assertThat(Duration.between(jwt.getIssuedAt(), jwt.getExpiresAt())).isEqualTo(Duration.ofHours(8));
         assertThat(jwt.getClaims()).containsOnlyKeys("sub", "iss", "iat", "exp");
     }
 
